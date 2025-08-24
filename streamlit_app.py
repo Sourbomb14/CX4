@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
 
-# Set page configuration
+# Set page configuration with enhanced aesthetics
 st.set_page_config(
     page_title="US Government Assets Portfolio Analytics",
     page_icon="🏛️",
@@ -27,35 +27,83 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# Enhanced Custom CSS for aesthetic appeal
 st.markdown("""
 <style>
+    /* Global styling */
+    .main {
+        background-color: #f8f9fa;
+        padding: 1rem;
+    }
     .main-header {
-        font-size: 2.5rem;
+        font-size: 2.8rem;
         color: #1f4e79;
         text-align: center;
-        margin-bottom: 2rem;
+        margin-bottom: 1.5rem;
+        font-weight: bold;
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
     }
     .metric-container {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 5px solid #1f4e79;
+        background-color: #ffffff;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        border-left: 6px solid #1f4e79;
+        transition: all 0.3s ease;
+    }
+    .metric-container:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 6px 8px rgba(0,0,0,0.15);
     }
     .insight-box {
         background-color: #e8f4f8;
-        padding: 1rem;
-        border-radius: 0.5rem;
+        padding: 1.5rem;
+        border-radius: 10px;
         margin: 1rem 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border-left: 4px solid #36a2eb;
     }
     .stMetric > label {
-        font-size: 1.2rem !important;
+        font-size: 1.3rem !important;
         font-weight: bold !important;
+        color: #1f4e79;
+    }
+    .stMetric > div {
+        font-size: 2rem !important;
+        color: #4f8bba;
+    }
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background-color: #1f4e79;
+        color: white;
+    }
+    [data-testid="stSidebar"] .css-1d391kg {
+        color: white !important;
+    }
+    /* Button styling */
+    .stButton > button {
+        background-color: #36a2eb;
+        color: white;
+        border-radius: 5px;
+        border: none;
+        padding: 0.5rem 1rem;
+        transition: all 0.3s ease;
+    }
+    .stButton > button:hover {
+        background-color: #4f8bba;
+        transform: translateY(-2px);
+    }
+    /* Chart containers */
+    .stPlotlyChart {
+        background-color: white;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        padding: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Cache data loading functions
+# Cache data loading functions (unchanged)
 @st.cache_data
 def load_assets_data():
     """Load US Government Assets dataset"""
@@ -256,7 +304,7 @@ def create_ml_features(df):
     return df, features
 
 def create_folium_map(df, sample_size=500):
-    """Create interactive Folium map"""
+    """Create interactive Folium map with enhanced visuals"""
     # Check if we have the required columns
     if 'latitude' not in df.columns or 'longitude' not in df.columns:
         return None
@@ -277,46 +325,49 @@ def create_folium_map(df, sample_size=500):
     center_lat = map_data['latitude'].mean()
     center_lon = map_data['longitude'].mean()
     
-    # Create map
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=4)
+    # Create map with dark theme for aesthetic appeal
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=4, tiles='CartoDB dark_matter')
     
-    # Add markers
-    colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'lightred', 'beige', 'darkblue', 'darkgreen']
+    # Add markers with enhanced popups
+    colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40']
     
     for idx, (_, row) in enumerate(map_data.iterrows()):
         if 'cluster' in row and not pd.isna(row['cluster']):
             color = colors[int(row['cluster']) % len(colors)]
         else:
-            color = 'blue'
+            color = '#36A2EB'
         
         popup_text = f"""
-        <b>Government Asset</b><br>
-        Location: {row.get('city', 'N/A')}, {row.get('state', 'N/A')}<br>
-        Estimated Value: ${row.get('estimated_value', 0):,.0f}<br>
-        Cluster: {row.get('cluster', 'N/A')}
+        <div style="font-family: Arial; color: #333; min-width: 250px;">
+            <h4 style="color: #1f4e79;">Government Asset</h4>
+            <p><b>Location:</b> {row.get('city', 'N/A')}, {row.get('state', 'N/A')}</p>
+            <p><b>Estimated Value:</b> ${row.get('estimated_value', 0):,.0f}</p>
+            <p><b>Cluster:</b> {row.get('cluster', 'N/A')}</p>
+        </div>
         """
         
         folium.CircleMarker(
             location=[row['latitude'], row['longitude']],
-            radius=6,
+            radius=8,
             popup=folium.Popup(popup_text, max_width=300),
-            color='black',
+            color=color,
+            fill=True,
             fillColor=color,
-            fillOpacity=0.7,
-            weight=1
+            fillOpacity=0.8,
+            weight=2
         ).add_to(m)
     
     return m
 
 def main():
-    # Header
+    # Header with enhanced styling
     st.markdown('<h1 class="main-header">🏛️ US Government Assets Portfolio Analytics Dashboard</h1>', 
                 unsafe_allow_html=True)
     
-    # Sidebar
+    # Sidebar with logo and navigation
     st.sidebar.image("https://via.placeholder.com/300x100/1f4e79/ffffff?text=Analytics+Dashboard", 
                      use_container_width=True)
-    st.sidebar.markdown("### 📊 Navigation")
+    st.sidebar.markdown("### 📊 Navigation", unsafe_allow_html=True)
     
     # Load data
     with st.spinner("Loading datasets..."):
@@ -336,8 +387,8 @@ def main():
         st.error("No data available for analysis.")
         return
     
-    # Sidebar filters
-    st.sidebar.markdown("### 🔍 Filters")
+    # Sidebar filters with enhanced UI
+    st.sidebar.markdown("### 🔍 Filters", unsafe_allow_html=True)
     
     # State filter
     if 'state' in df_merged.columns:
@@ -370,15 +421,15 @@ def main():
                 (df_filtered['estimated_value'] <= value_range[1])
             ]
     
-    # Navigation
+    # Navigation with icons
     page = st.sidebar.selectbox(
         "Choose Analysis",
         ["📊 Executive Dashboard", "🗺️ Geographic Analysis", "🎯 Clustering Analysis", 
          "🤖 Machine Learning", "📈 Advanced Analytics"]
     )
     
-    # Show filtered data info
-    st.sidebar.markdown("### 📋 Data Summary")
+    # Show filtered data info with metrics
+    st.sidebar.markdown("### 📋 Data Summary", unsafe_allow_html=True)
     st.sidebar.metric("Total Assets", f"{len(df_filtered):,}")
     if 'state' in df_filtered.columns:
         st.sidebar.metric("States", f"{df_filtered['state'].nunique()}")
@@ -396,53 +447,49 @@ def main():
         show_advanced_analytics(df_filtered)
 
 def show_executive_dashboard(df):
-    """Show executive dashboard"""
+    """Show executive dashboard with enhanced visuals"""
     st.header("📊 Executive Dashboard")
     
     if len(df) == 0:
         st.warning("No data available with current filters.")
         return
     
-    # Key metrics
+    # Key metrics with custom containers
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric(
-            "Total Assets",
-            f"{len(df):,}"
-        )
+        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+        st.metric("Total Assets", f"{len(df):,}")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
+        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
         if 'estimated_value' in df.columns:
             total_value = df['estimated_value'].sum()
-            st.metric(
-                "Portfolio Value",
-                f"${total_value/1e9:.1f}B"
-            )
+            st.metric("Portfolio Value", f"${total_value/1e9:.1f}B")
         else:
             st.metric("Portfolio Value", "N/A")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col3:
+        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
         if 'estimated_value' in df.columns:
             avg_value = df['estimated_value'].mean()
-            st.metric(
-                "Average Asset Value",
-                f"${avg_value/1e6:.1f}M"
-            )
+            st.metric("Average Asset Value", f"${avg_value/1e6:.1f}M")
         else:
             st.metric("Average Asset Value", "N/A")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col4:
+        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
         if 'state' in df.columns:
             states_count = df['state'].nunique()
-            st.metric(
-                "States Covered",
-                f"{states_count}"
-            )
+            st.metric("States Covered", f"{states_count}")
         else:
             st.metric("States Covered", "N/A")
+        st.markdown('</div>', unsafe_allow_html=True)
     
-    # Charts
+    # Charts with enhanced themes
     col1, col2 = st.columns(2)
     
     with col1:
@@ -452,11 +499,14 @@ def show_executive_dashboard(df):
                 df, 
                 x='estimated_value', 
                 nbins=30,
-                title="Distribution of Asset Values"
+                title="Distribution of Asset Values",
+                color_discrete_sequence=['#36A2EB']
             )
             fig.update_layout(
                 xaxis_title="Estimated Value ($)",
-                yaxis_title="Number of Assets"
+                yaxis_title="Number of Assets",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -469,17 +519,21 @@ def show_executive_dashboard(df):
             fig = px.bar(
                 x=state_counts.index,
                 y=state_counts.values,
-                title="Assets by State"
+                title="Assets by State",
+                color=state_counts.values,
+                color_continuous_scale="Blues"
             )
             fig.update_layout(
                 xaxis_title="State",
-                yaxis_title="Number of Assets"
+                yaxis_title="Number of Assets",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("State data not available")
     
-    # Portfolio insights
+    # Portfolio insights with styled boxes
     st.subheader("💡 Key Insights")
     
     insights = []
@@ -507,7 +561,7 @@ def show_executive_dashboard(df):
         st.markdown(f'<div class="insight-box">{insight}</div>', unsafe_allow_html=True)
 
 def show_geographic_analysis(df):
-    """Show geographic analysis"""
+    """Show geographic analysis with enhanced map"""
     st.header("🗺️ Geographic Analysis")
     
     if 'latitude' not in df.columns or 'longitude' not in df.columns:
@@ -531,7 +585,7 @@ def show_geographic_analysis(df):
     map_obj = create_folium_map(df_clustered)
     
     if map_obj is not None:
-        map_data = st_folium(map_obj, width=700, height=500)
+        st_folium(map_obj, width=725, height=500, returned_objects=[])
     else:
         st.error("Could not create map")
     
@@ -550,7 +604,7 @@ def show_geographic_analysis(df):
             state_stats.columns = ['Asset Count', 'Total Value', 'Avg Value', 'Center Lat', 'Center Lon']
             state_stats = state_stats.sort_values('Total Value', ascending=False)
             
-            st.dataframe(state_stats.head(10))
+            st.dataframe(state_stats.head(10), use_container_width=True)
         else:
             st.info("State or value data not available for analysis")
     
@@ -566,11 +620,13 @@ def show_geographic_analysis(df):
                     orientation='h',
                     title="Total Asset Value by State",
                     color=state_values.values,
-                    color_continuous_scale="Viridis"
+                    color_continuous_scale="Blues"
                 )
                 fig.update_layout(
                     xaxis_title="Total Value ($)",
-                    yaxis_title="State"
+                    yaxis_title="State",
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)'
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -579,7 +635,7 @@ def show_geographic_analysis(df):
             st.info("State or value data not available")
 
 def show_clustering_analysis(df):
-    """Show clustering analysis using K-Means only"""
+    """Show clustering analysis with enhanced visuals"""
     st.header("🎯 Clustering Analysis")
     
     # Check if we have necessary data
@@ -607,7 +663,7 @@ def show_clustering_analysis(df):
         df_clustered, model = perform_clustering(df_clean, n_clusters=n_clusters)
     
     with col2:
-        # Cluster visualization
+        # Cluster visualization with enhanced mapbox
         if 'latitude' in df_clustered.columns and 'longitude' in df_clustered.columns:
             sample_size = min(1000, len(df_clustered))
             sample_data = df_clustered.sample(n=sample_size, random_state=42)
@@ -622,7 +678,12 @@ def show_clustering_analysis(df):
                 mapbox_style="open-street-map",
                 zoom=3,
                 height=600,
-                title="Asset Clusters Geographic Distribution"
+                title="Asset Clusters Geographic Distribution",
+                color_continuous_scale=px.colors.qualitative.Pastel1
+            )
+            fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
             )
             st.plotly_chart(fig, use_container_width=True)
     
@@ -651,22 +712,27 @@ def show_clustering_analysis(df):
             
             with col1:
                 st.write("**Cluster Statistics**")
-                st.dataframe(cluster_stats)
+                st.dataframe(cluster_stats, use_container_width=True)
             
             with col2:
-                # Cluster size pie chart
+                # Cluster size pie chart with enhanced colors
                 cluster_counts = valid_clusters['cluster'].value_counts()
                 fig = px.pie(
                     values=cluster_counts.values,
                     names=[f'Cluster {i}' for i in cluster_counts.index],
-                    title="Assets Distribution by Cluster"
+                    title="Assets Distribution by Cluster",
+                    color_discrete_sequence=px.colors.qualitative.Pastel
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)'
                 )
                 st.plotly_chart(fig, use_container_width=True)
         else:
             st.warning("No valid clusters found with current parameters.")
 
 def show_machine_learning(df):
-    """Show machine learning analysis"""
+    """Show machine learning analysis with enhanced UI"""
     st.header("🤖 Machine Learning Analysis")
     
     if 'estimated_value' not in df.columns:
@@ -698,7 +764,7 @@ def show_machine_learning(df):
         st.warning("Not enough data for meaningful ML analysis.")
         return
     
-    # ML tasks
+    # ML tasks with selectbox
     task = st.selectbox("Select ML Task", 
                        ["Value Prediction (Regression)", "Value Classification", "High-Value Detection"])
     
@@ -726,7 +792,7 @@ def show_machine_learning(df):
                     
                     st.metric("R² Score", f"{r2:.3f}")
                     
-                    # Feature importance
+                    # Feature importance with enhanced bar
                     feature_importance = pd.DataFrame({
                         'feature': available_features,
                         'importance': model.feature_importances_
@@ -737,7 +803,13 @@ def show_machine_learning(df):
                         x='importance',
                         y='feature',
                         orientation='h',
-                        title="Top Feature Importances"
+                        title="Top Feature Importances",
+                        color='importance',
+                        color_continuous_scale="Blues"
+                    )
+                    fig.update_layout(
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)'
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
@@ -768,12 +840,17 @@ def show_machine_learning(df):
                         
                         st.metric("Accuracy", f"{accuracy:.3f}")
                         
-                        # Class distribution
+                        # Class distribution with pie
                         class_dist = y.value_counts()
                         fig = px.pie(
                             values=class_dist.values,
                             names=class_dist.index,
-                            title="Asset Value Categories Distribution"
+                            title="Asset Value Categories Distribution",
+                            color_discrete_sequence=px.colors.qualitative.Pastel
+                        )
+                        fig.update_layout(
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)'
                         )
                         st.plotly_chart(fig, use_container_width=True)
                     else:
@@ -808,7 +885,7 @@ def show_machine_learning(df):
                     st.metric("Accuracy", f"{accuracy:.3f}")
                     st.metric("High-Value Threshold", f"${threshold/1e6:.1f}M")
                     
-                    # Distribution
+                    # Distribution with bar
                     dist_data = pd.DataFrame({
                         'Category': ['Regular Value', 'High Value'],
                         'Count': [(y == 0).sum(), (y == 1).sum()]
@@ -818,7 +895,13 @@ def show_machine_learning(df):
                         dist_data,
                         x='Category',
                         y='Count',
-                        title="Asset Value Distribution"
+                        title="Asset Value Distribution",
+                        color='Category',
+                        color_discrete_sequence=['#36A2EB', '#FF6384']
+                    )
+                    fig.update_layout(
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)'
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
@@ -844,10 +927,10 @@ def show_machine_learning(df):
         st.write("**Sample Data:**")
         sample_cols = ['estimated_value'] + available_features[:3]
         available_sample_cols = [col for col in sample_cols if col in df_ml.columns]
-        st.dataframe(df_ml[available_sample_cols].head())
+        st.dataframe(df_ml[available_sample_cols].head(), use_container_width=True)
 
 def show_advanced_analytics(df):
-    """Show advanced analytics"""
+    """Show advanced analytics with enhanced tabs"""
     st.header("📈 Advanced Analytics")
     
     tabs = st.tabs(["📊 Statistical Analysis", "🔍 Data Quality", "📈 Trends"])
@@ -873,9 +956,13 @@ def show_advanced_analytics(df):
                 st.metric("Max Value", f"${stats_df['max']/1e6:.1f}M")
                 st.metric("75th Percentile", f"${stats_df['75%']/1e6:.1f}M")
             
-            # Box plot
-            fig = px.box(df, y='estimated_value', title="Asset Value Distribution")
-            fig.update_layout(yaxis_title="Estimated Value ($)")
+            # Box plot with enhanced style
+            fig = px.box(df, y='estimated_value', title="Asset Value Distribution", color_discrete_sequence=['#36A2EB'])
+            fig.update_layout(
+                yaxis_title="Estimated Value ($)",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
+            )
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Estimated value data not available for statistical analysis.")
@@ -900,12 +987,18 @@ def show_advanced_analytics(df):
                 x='Missing %',
                 y='Column',
                 orientation='h',
-                title="Missing Data by Column (Top 10)"
+                title="Missing Data by Column (Top 10)",
+                color='Missing %',
+                color_continuous_scale="Reds"
+            )
+            fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
             )
             st.plotly_chart(fig, use_container_width=True)
             
             st.write("**Data Quality Summary:**")
-            st.dataframe(quality_df)
+            st.dataframe(quality_df, use_container_width=True)
         else:
             st.success("✅ No missing data found in the dataset!")
         
@@ -937,7 +1030,7 @@ def show_advanced_analytics(df):
             state_analysis = state_analysis.sort_values('Total Value', ascending=False).head(20)
             
             if len(state_analysis) > 0:
-                # Bubble chart
+                # Bubble chart with enhanced visuals
                 size_col = 'Total Value'
                 color_col = 'Avg Sqft' if 'Avg Sqft' in state_analysis.columns else 'Asset Count'
                 
@@ -948,13 +1041,18 @@ def show_advanced_analytics(df):
                     size='Total Value',
                     color=color_col,
                     hover_name='state',
-                    title="State Portfolio Analysis (Bubble Chart)"
+                    title="State Portfolio Analysis (Bubble Chart)",
+                    color_continuous_scale="Viridis"
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)'
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 
                 # Top states table
                 st.write("**Top 20 States by Portfolio Value:**")
-                st.dataframe(state_analysis)
+                st.dataframe(state_analysis, use_container_width=True)
             else:
                 st.info("No state data available for trend analysis.")
         else:
