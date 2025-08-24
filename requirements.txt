@@ -6,3 +6,6 @@ folium
 streamlit-folium
 scikit-learn
 requests
+shap
+matplotlib
+seaborn
