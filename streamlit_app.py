@@ -246,7 +246,7 @@ with tabs[2]:
     df_prices = normalize_column_names(df_prices_raw)
 
     # Find plausible sqft/area columns
-    sqft_cols = [c for c in df_assets.columns if any(k in c for k in ["sqft", "sq_ft", "area"])]
+    sqft_cols = [c for c in df_assets.columns if any(k in c for k in ["sqft", "sq_ft", "area", "size", "rentable", "usable"])]
     if len(sqft_cols):
         for c in sqft_cols:
             df_assets[c] = safe_number_series(df_assets[c]).fillna(0)
@@ -269,6 +269,10 @@ with tabs[2]:
     for std, orig in location_mapping.items():
         if orig in df_assets.columns:
             df_assets[std] = df_assets[orig]
+
+    # Clean zip codes if present
+    if 'zip_code' in df_assets.columns:
+        df_assets['zip_code_clean'] = df_assets['zip_code'].apply(clean_zip_code)
 
     # Validate coordinates (US bounds as in notebook)
     if 'latitude' in df_assets.columns and 'longitude' in df_assets.columns:
@@ -297,6 +301,15 @@ with tabs[2]:
         df_prices['latest_price_index'] = 100.0
         st.warning("No year columns found in Prices; using baseline latest_price_index=100.")
 
+    # Clean zip codes in prices if present
+    zip_col_prices = None
+    for c in df_prices.columns:
+        if 'zip' in c.lower():
+            zip_col_prices = c
+            break
+    if zip_col_prices:
+        df_prices['zip_code_clean'] = df_prices[zip_col_prices].apply(clean_zip_code)
+
     st.markdown("**After Cleaning — Prices (sample)**")
     st.dataframe(df_prices.head(20), use_container_width=True)
 
@@ -306,21 +319,93 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("🔗 Intelligent Merge (ZIP / City-State) + Valuation")
 
-    # ... (same merging logic up to value computation)
-
-    # Estimated value
+    # Identify rentable column
+    rentable_col = None
+    potential_rentable_cols = [c for c in df_assets.columns if any(k in c.lower() for k in ["sqft", "sq_ft", "area", "size", "rentable", "usable"])]
+    if potential_rentable_cols:
+        # Choose the first one, or prioritize rentable/sqft columns
+        for preferred in ["rentable", "sqft", "sq_ft", "area", "size"]:
+            for col in potential_rentable_cols:
+                if preferred in col.lower():
+                    rentable_col = col
+                    break
+            if rentable_col:
+                break
+        if not rentable_col:
+            rentable_col = potential_rentable_cols[0]
+    
     if rentable_col:
+        st.info(f"Using **{rentable_col}** as the rentable area column.")
+    else:
+        st.warning("No rentable area column found. Will use basic valuation.")
+
+    # Merge strategy: ZIP first, then city-state fallback
+    df_merged = None
+    
+    # Strategy 1: ZIP-based merge
+    if 'zip_code_clean' in df_assets.columns and 'zip_code_clean' in df_prices.columns:
+        zip_merge = df_assets.merge(df_prices, on='zip_code_clean', how='left', suffixes=('', '_price'))
+        zip_matched = zip_merge['latest_price_index'].notna().sum()
+        st.write(f"ZIP merge matched: **{zip_matched:,}** records")
+        df_merged = zip_merge
+    
+    # Strategy 2: City-State fallback (if we have these columns)
+    if df_merged is None or df_merged['latest_price_index'].isna().sum() > 0:
+        # Try to find city/state columns in prices
+        city_col_prices = state_col_prices = None
+        for c in df_prices.columns:
+            if 'city' in c.lower() and city_col_prices is None:
+                city_col_prices = c
+            if 'state' in c.lower() and state_col_prices is None:
+                state_col_prices = c
+        
+        if city_col_prices and state_col_prices and 'city' in df_assets.columns and 'state' in df_assets.columns:
+            # Create city_state combo for more reliable matching
+            df_assets['city_state'] = df_assets['city'].astype(str) + '_' + df_assets['state'].astype(str)
+            df_prices['city_state'] = df_prices[city_col_prices].astype(str) + '_' + df_prices[state_col_prices].astype(str)
+            
+            if df_merged is None:
+                df_merged = df_assets.merge(df_prices, on='city_state', how='left', suffixes=('', '_price'))
+            else:
+                # Fill missing values from city-state merge
+                missing_mask = df_merged['latest_price_index'].isna()
+                city_state_merge = df_assets[missing_mask].merge(df_prices, on='city_state', how='left', suffixes=('', '_price'))
+                df_merged.loc[missing_mask, 'latest_price_index'] = city_state_merge['latest_price_index']
+            
+            city_state_matched = df_merged['latest_price_index'].notna().sum() - (zip_matched if 'zip_matched' in locals() else 0)
+            st.write(f"City-State merge added: **{city_state_matched:,}** additional matches")
+
+    # If no merge worked, use assets only with default price index
+    if df_merged is None:
+        df_merged = df_assets.copy()
+        df_merged['latest_price_index'] = 100.0
+        st.warning("No geographic merge possible. Using default price index of 100.")
+    else:
+        # Fill remaining missing price indices with median
+        missing_count = df_merged['latest_price_index'].isna().sum()
+        if missing_count > 0:
+            median_price = df_merged['latest_price_index'].median()
+            df_merged['latest_price_index'].fillna(median_price, inplace=True)
+            st.write(f"Filled **{missing_count:,}** missing price indices with median value: **{median_price:.1f}**")
+
+    # Estimated value calculation
+    if rentable_col and rentable_col in df_merged.columns:
         df_merged[rentable_col] = safe_number_series(df_merged[rentable_col]).fillna(0)
+        # Use rentable area * price index * multiplier
         df_merged['estimated_value'] = df_merged[rentable_col] * (df_merged['latest_price_index'] / 100.0) * 10.0
     else:
+        # Basic valuation based on price index only
         df_merged['estimated_value'] = df_merged['latest_price_index'] * 1000.0
 
+    # Premium adjustment for high-value states
     if 'state' in df_merged.columns:
         high_value_states = ['CA','NY','MA','CT','NJ','HI','MD','WA']
         premium_mask = df_merged['state'].isin(high_value_states)
         df_merged.loc[premium_mask, 'estimated_value'] *= 1.5
+        premium_count = premium_mask.sum()
+        st.write(f"Applied premium multiplier to **{premium_count:,}** assets in high-value states")
 
-    # ✅ Safe scoring helper
+    # Safe scoring helper
     def safe_qcut(series, q=5, labels=None):
         series = series.fillna(0)
         if series.nunique() < q:  # too few unique values for qcut
@@ -330,37 +415,53 @@ with tabs[3]:
         except Exception:
             return pd.Series([1] * len(series), index=series.index, dtype=float)
 
-    # Scores
+    # Scoring system
     scoring_cols = []
-    if rentable_col:
+    
+    # Size score (if we have rentable area)
+    if rentable_col and rentable_col in df_merged.columns:
         df_merged['size_score'] = safe_qcut(df_merged[rentable_col], 5, labels=[1,2,3,4,5])
         scoring_cols.append('size_score')
+    
+    # Location score based on price index
     df_merged['location_score'] = safe_qcut(df_merged['latest_price_index'], 5, labels=[1,2,3,4,5])
     scoring_cols.append('location_score')
+    
+    # Value score
     df_merged['value_score'] = safe_qcut(df_merged['estimated_value'], 5, labels=[1,2,3,4,5])
     scoring_cols.append('value_score')
+    
+    # Composite score
     df_merged['composite_score'] = df_merged[scoring_cols].mean(axis=1)
 
-    # Cache merged for later tabs
+    # Cache merged data for later tabs
     st.session_state["df_merged"] = df_merged
 
-    # KPIs
+    # Display key metrics
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown(f'<div class="metric-card"><div class="kpi">{len(df_merged):,}</div><div class="kpi-label">Merged Records</div></div>', unsafe_allow_html=True)
     with k2:
-        st.markdown(f'<div class="metric-card"><div class="kpi">${df_merged["estimated_value"].mean():,.0f}</div><div class="kpi-label">Avg Est. Value</div></div>', unsafe_allow_html=True)
+        avg_val = df_merged["estimated_value"].mean()
+        st.markdown(f'<div class="metric-card"><div class="kpi">${avg_val:,.0f}</div><div class="kpi-label">Avg Est. Value</div></div>', unsafe_allow_html=True)
     with k3:
-        st.markdown(f'<div class="metric-card"><div class="kpi">${df_merged["estimated_value"].median():,.0f}</div><div class="kpi-label">Median Est. Value</div></div>', unsafe_allow_html=True)
+        med_val = df_merged["estimated_value"].median()
+        st.markdown(f'<div class="metric-card"><div class="kpi">${med_val:,.0f}</div><div class="kpi-label">Median Est. Value</div></div>', unsafe_allow_html=True)
     with k4:
-        st.markdown(f'<div class="metric-card"><div class="kpi">${df_merged["estimated_value"].sum():,.0f}</div><div class="kpi-label">Total Portfolio</div></div>', unsafe_allow_html=True)
+        total_val = df_merged["estimated_value"].sum()
+        st.markdown(f'<div class="metric-card"><div class="kpi">${total_val:,.0f}</div><div class="kpi-label">Total Portfolio</div></div>', unsafe_allow_html=True)
 
+    # Top performers table
     st.markdown("**Top 10 by Estimated Value**")
     disp_cols = ['estimated_value', 'composite_score']
-    for c in ['state','city', rentable_col]:
-        if c in df_merged.columns and c not in disp_cols:
+    for c in ['state', 'city', rentable_col, 'latest_price_index']:
+        if c and c in df_merged.columns and c not in disp_cols:
             disp_cols.append(c)
-    st.dataframe(df_merged.nlargest(10, 'estimated_value')[disp_cols], use_container_width=True)
+    top_10 = df_merged.nlargest(10, 'estimated_value')[disp_cols].copy()
+    # Format the estimated_value column for better display
+    if 'estimated_value' in top_10.columns:
+        top_10['estimated_value'] = top_10['estimated_value'].apply(lambda x: f"${x:,.0f}")
+    st.dataframe(top_10, use_container_width=True)
 
 # ======================================================================================
 # 5) SPATIAL (Folium map with heatmap & markers)
@@ -394,8 +495,8 @@ with tabs[4]:
                 center_lon = df_geo['longitude'].mean()
                 fmap = folium.Map(location=[center_lat, center_lon], zoom_start=4, tiles="OpenStreetMap")
 
-                # Heatmap
-                if show_heatmap:
+                # Heatmap layer
+                if show_heatmap and len(df_geo) > 0:
                     heat_data = []
                     for _, r in df_geo.iterrows():
                         val = float(max(r.get('estimated_value', 0.0), 1.0))
@@ -404,51 +505,65 @@ with tabs[4]:
                     if heat_data:
                         HeatMap(heat_data, name="Value Heatmap", min_opacity=0.3, radius=15, blur=10).add_to(fmap)
 
-              # Value markers
-                if show_markers:
+                # Value markers with color coding
+                if show_markers and len(df_geo) > 0:
                     vmin, vmax = df_geo['estimated_value'].min(), df_geo['estimated_value'].max()
                     colors = ['blue', 'green', 'orange', 'red', 'purple']
                     try:
-                        # ✅ use safe_qcut for markers too
                         q = safe_qcut(df_geo['estimated_value'], 5, labels=False)
                     except Exception:
                         q = pd.Series(0, index=df_geo.index)
 
-                    for i, (_, r) in enumerate(df_geo.iterrows()):
+                    for i, (idx, r) in enumerate(df_geo.iterrows()):
                         try:
                             if vmax > vmin:
                                 radius = 5 + (r['estimated_value']-vmin) / (vmax-vmin) * 15
                             else:
                                 radius = 10
-                            color = colors[int(q.iloc[i])] if i < len(q) else 'blue'
-                            popup = f"""
+                            
+                            color_idx = int(q.iloc[i]) if i < len(q) and not pd.isna(q.iloc[i]) else 0
+                            color = colors[min(color_idx, len(colors)-1)]
+                            
+                            popup_content = f"""
                             <b>Estimated Value:</b> ${r['estimated_value']:,.0f}<br>
                             <b>Location:</b> {r.get('city','N/A')}, {r.get('state','N/A')}<br>
-                            <b>Coords:</b> {r['latitude']:.4f}, {r['longitude']:.4f}
+                            <b>Coords:</b> {r['latitude']:.4f}, {r['longitude']:.4f}<br>
+                            <b>Composite Score:</b> {r.get('composite_score', 'N/A'):.2f}
                             """
                             folium.CircleMarker(
                                 location=[r['latitude'], r['longitude']],
                                 radius=radius,
-                                popup=folium.Popup(popup, max_width=300),
+                                popup=folium.Popup(popup_content, max_width=300),
                                 color='black', fillColor=color, fillOpacity=0.7, weight=1
                             ).add_to(fmap)
-                        except Exception:
+                        except Exception as e:
                             continue
 
-                # Clustered markers
+                # Clustered markers for overview
                 if show_clusters and len(df_geo) > 100:
                     cluster = MarkerCluster(name="Clustered View").add_to(fmap)
                     for _, r in df_geo.iterrows():
                         try:
                             folium.Marker(
                                 location=[r['latitude'], r['longitude']],
-                                popup=f"Value: ${r['estimated_value']:,.0f}"
+                                popup=f"Value: ${r['estimated_value']:,.0f}",
+                                icon=folium.Icon(color='blue', icon='info-sign')
                             ).add_to(cluster)
                         except Exception:
                             continue
 
                 folium.LayerControl().add_to(fmap)
                 st_folium(fmap, width=None, height=640)
+
+                # Map statistics
+                st.markdown("**Map Statistics**")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Points Displayed", f"{len(df_geo):,}")
+                with col2:
+                    st.metric("Avg Value", f"${df_geo['estimated_value'].mean():,.0f}")
+                with col3:
+                    st.metric("Total Value", f"${df_geo['estimated_value'].sum():,.0f}")
 
 # ======================================================================================
 # 6) CLUSTERING & SCORING
@@ -461,70 +576,124 @@ with tabs[5]:
         st.warning("Run the Merge tab first.")
     else:
         # Build GeoDataFrame for clustering
-        valid = df_merged[['latitude','longitude']].dropna()
-        if valid.empty:
+        coord_mask = (
+            df_merged['latitude'].notna() & 
+            df_merged['longitude'].notna() &
+            df_merged['latitude'].between(-90, 90) &
+            df_merged['longitude'].between(-180, 180)
+        )
+        valid_coords = df_merged[coord_mask]
+        
+        if valid_coords.empty:
             st.error("No valid coordinates for clustering.")
         else:
+            # Create GeoDataFrame
             gdf = gpd.GeoDataFrame(
-                df_merged.loc[valid.index].copy(),
-                geometry=[Point(xy) for xy in zip(df_merged.loc[valid.index, 'longitude'],
-                                                  df_merged.loc[valid.index, 'latitude'])],
+                valid_coords.copy(),
+                geometry=[Point(xy) for xy in zip(valid_coords['longitude'], valid_coords['latitude'])],
                 crs="EPSG:4326"
             )
 
+            # Sample for performance if needed
             if len(gdf) > sample_size:
                 gdf = gdf.sample(n=sample_size, random_state=42).reset_index(drop=True)
+                st.info(f"Sampled {sample_size:,} points from {len(valid_coords):,} valid coordinates for clustering analysis.")
 
+            # Project to Web Mercator for distance calculations
             gdf_3857 = to_webmercator(gdf)
             if gdf_3857 is None:
-                st.error("Could not project to EPSG:3857 for DBSCAN.")
+                st.error("Could not project to EPSG:3857 for DBSCAN clustering.")
             else:
+                # Extract coordinates for clustering
                 coords = np.column_stack([gdf_3857.geometry.x.values, gdf_3857.geometry.y.values])
 
-                db = DBSCAN(eps=km_to_meters(eps_km), min_samples=min_samples)
-                labels = db.fit_predict(coords)
-                gdf['spatial_cluster'] = labels
+                # Run DBSCAN clustering
+                with st.spinner("Running DBSCAN clustering..."):
+                    db = DBSCAN(eps=km_to_meters(eps_km), min_samples=min_samples)
+                    labels = db.fit_predict(coords)
+                    gdf['spatial_cluster'] = labels
 
+                # Clustering results
                 n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
                 n_noise = int((labels == -1).sum())
 
+                # Display clustering metrics
                 k1, k2, k3 = st.columns(3)
                 with k1:
-                    st.markdown(f'<div class="metric-card"><div class="kpi">{n_clusters}</div><div class="kpi-label">Clusters</div></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="metric-card"><div class="kpi">{n_clusters}</div><div class="kpi-label">Clusters Found</div></div>', unsafe_allow_html=True)
                 with k2:
                     st.markdown(f'<div class="metric-card"><div class="kpi">{n_noise}</div><div class="kpi-label">Noise Points</div></div>', unsafe_allow_html=True)
                 with k3:
-                    st.markdown(f'<div class="metric-card"><div class="kpi">{len(gdf):,}</div><div class="kpi-label">Analyzed Points</div></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="metric-card"><div class="kpi">{len(gdf):,}</div><div class="kpi-label">Points Analyzed</div></div>', unsafe_allow_html=True)
 
-                # Cluster summary
+                # Cluster analysis
                 if n_clusters > 0:
-                    clust_stats = (gdf[gdf['spatial_cluster'] != -1]
-                                   .groupby('spatial_cluster')
-                                   .agg(asset_count=('estimated_value','count'),
-                                        total_value=('estimated_value','sum'),
-                                        avg_value=('estimated_value','mean'))
-                                   .sort_values('total_value', ascending=False)
-                                   .round(2))
-                    st.markdown("**Cluster Summary (top by total value)**")
-                    st.dataframe(clust_stats.head(15), use_container_width=True)
+                    clustered_data = gdf[gdf['spatial_cluster'] != -1]
+                    clust_stats = (clustered_data.groupby('spatial_cluster')
+                                   .agg({
+                                       'estimated_value': ['count', 'sum', 'mean'],
+                                       'composite_score': 'mean'
+                                   }).round(2))
+                    
+                    # Flatten column names
+                    clust_stats.columns = ['asset_count', 'total_value', 'avg_value', 'avg_score']
+                    clust_stats = clust_stats.sort_values('total_value', ascending=False)
+                    
+                    st.markdown("**Cluster Summary (ranked by total value)**")
+                    # Format the display
+                    display_stats = clust_stats.copy()
+                    display_stats['total_value'] = display_stats['total_value'].apply(lambda x: f"${x:,.0f}")
+                    display_stats['avg_value'] = display_stats['avg_value'].apply(lambda x: f"${x:,.0f}")
+                    st.dataframe(display_stats.head(15), use_container_width=True)
 
-                # Quick cluster scatter (Plotly)
-                if {'latitude','longitude','spatial_cluster'}.issubset(gdf.columns):
+                # Cluster visualization map
+                if n_clusters > 0 and len(gdf) > 0:
+                    st.markdown("**Spatial Clusters Map**")
+                    sample_for_viz = gdf.sample(min(len(gdf), 5000), random_state=42) if len(gdf) > 5000 else gdf
+                    
                     fig = px.scatter_mapbox(
-                        gdf.sample(min(len(gdf), 5000), random_state=42),
+                        sample_for_viz,
                         lat="latitude", lon="longitude",
-                        color=gdf['spatial_cluster'].astype(str),
-                        hover_data={'estimated_value':':.0f','spatial_cluster':True},
-                        zoom=3, height=600
+                        color=sample_for_viz['spatial_cluster'].astype(str),
+                        hover_data={'estimated_value': ':,.0f', 'spatial_cluster': True, 'composite_score': ':.2f'},
+                        zoom=3, height=600,
+                        title="Asset Clusters by Geographic Location"
                     )
-                    fig.update_layout(mapbox_style="open-street-map", margin=dict(l=10,r=10,t=30,b=10))
+                    fig.update_layout(mapbox_style="open-street-map", margin=dict(l=10,r=10,t=40,b=10))
                     st.plotly_chart(fig, use_container_width=True)
 
-                st.markdown("**Sample of clustered data**")
-                show_cols = ['latitude','longitude','estimated_value','spatial_cluster']
-                for c in ['state','city','composite_score']:
-                    if c in gdf.columns: show_cols.append(c)
-                st.dataframe(gdf[show_cols].head(20), use_container_width=True)
+                # Score distribution analysis
+                st.markdown("**Score Distribution Analysis**")
+                score_cols = [c for c in gdf.columns if 'score' in c and gdf[c].dtype in ['float64', 'int64']]
+                
+                if score_cols:
+                    fig = go.Figure()
+                    for col in score_cols:
+                        fig.add_trace(go.Histogram(
+                            x=gdf[col].dropna(),
+                            name=col.replace('_', ' ').title(),
+                            opacity=0.7
+                        ))
+                    fig.update_layout(
+                        title="Distribution of Scoring Metrics",
+                        xaxis_title="Score",
+                        yaxis_title="Frequency",
+                        barmode='overlay',
+                        height=400
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # Sample of clustered data
+                st.markdown("**Sample of Clustered Data**")
+                show_cols = ['latitude', 'longitude', 'estimated_value', 'spatial_cluster', 'composite_score']
+                for c in ['state', 'city']:
+                    if c in gdf.columns:
+                        show_cols.append(c)
+                
+                sample_data = gdf[show_cols].head(20).copy()
+                if 'estimated_value' in sample_data.columns:
+                    sample_data['estimated_value'] = sample_data['estimated_value'].apply(lambda x: f"${x:,.0f}")
+                st.dataframe(sample_data, use_container_width=True)
 
 # --------------------------------------------------------------------------------------
 # Footer
