@@ -13,7 +13,7 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, r2_score
+from sklearn.metrics import accuracy_score, r2_score, davies_bouldin_score
 import seaborn as sns
 import matplotlib.pyplot as plt
 import warnings
@@ -92,7 +92,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Cache data loading functions (unchanged)
+# Cache data loading functions
 @st.cache_data
 def load_assets_data():
     """Load US Government Assets dataset"""
@@ -138,33 +138,10 @@ def load_housing_data():
             return None
 
 @st.cache_data
-def create_sample_data():
-    """Create sample data if real data is not available"""
-    np.random.seed(42)
-    n_samples = 1000
-    
-    # US state abbreviations
-    states = ['CA', 'TX', 'NY', 'FL', 'IL', 'PA', 'OH', 'GA', 'NC', 'MI', 'NJ', 'VA', 'WA', 'AZ', 'MA']
-    
-    # Generate sample data
-    data = {
-        'state': np.random.choice(states, n_samples),
-        'city': np.random.choice(['Los Angeles', 'Houston', 'New York', 'Miami', 'Chicago', 
-                                'Philadelphia', 'Phoenix', 'Atlanta', 'Boston', 'Seattle'], n_samples),
-        'latitude': np.random.uniform(25, 48, n_samples),
-        'longitude': np.random.uniform(-125, -70, n_samples),
-        'building_rentable_square_feet': np.random.uniform(1000, 100000, n_samples),
-        'estimated_value': np.random.lognormal(13, 1.5, n_samples),
-        'latest_price_index': np.random.uniform(50000, 800000, n_samples)
-    }
-    
-    return pd.DataFrame(data)
-
-@st.cache_data
 def clean_and_merge_data(df_assets, df_prices):
     """Clean and merge the datasets"""
-    if df_assets is None:
-        return create_sample_data()
+    if df_assets is None or df_prices is None:
+        raise ValueError("Data loading failed. Cannot proceed without real data.")
     
     # Clean column names
     df_assets.columns = df_assets.columns.str.lower().str.replace(' ', '_').str.replace('-', '_')
@@ -178,45 +155,42 @@ def clean_and_merge_data(df_assets, df_prices):
         )
         df_assets = df_assets[valid_coords]
     
-    if df_prices is not None:
-        df_prices.columns = df_prices.columns.str.lower().str.replace(' ', '_').str.replace('-', '_')
+    df_prices.columns = df_prices.columns.str.lower().str.replace(' ', '_').str.replace('-', '_')
+    
+    # Get latest housing price index
+    price_cols = [col for col in df_prices.columns if any(year in str(col) for year in ['2024', '2025'])]
+    if price_cols:
+        latest_col = sorted(price_cols, reverse=True)[0]
+        df_prices['latest_price_index'] = pd.to_numeric(df_prices[latest_col], errors='coerce')
+    
+    # Create merge keys if possible
+    if 'city' in df_assets.columns and 'state' in df_assets.columns and 'city' in df_prices.columns and 'state' in df_prices.columns:
+        df_assets['city_state_key'] = (
+            df_assets['city'].astype(str).str.lower().str.strip() + '_' + 
+            df_assets['state'].astype(str).str.lower().str.strip()
+        )
         
-        # Get latest housing price index
-        price_cols = [col for col in df_prices.columns if any(year in str(col) for year in ['2024', '2025'])]
-        if price_cols:
-            latest_col = sorted(price_cols, reverse=True)[0]
-            df_prices['latest_price_index'] = pd.to_numeric(df_prices[latest_col], errors='coerce')
+        df_prices['city_state_key'] = (
+            df_prices['city'].astype(str).str.lower().str.strip() + '_' + 
+            df_prices['state'].astype(str).str.lower().str.strip()
+        )
         
-        # Create merge keys if possible
-        if 'city' in df_assets.columns and 'state' in df_assets.columns and 'city' in df_prices.columns and 'state' in df_prices.columns:
-            df_assets['city_state_key'] = (
-                df_assets['city'].astype(str).str.lower().str.strip() + '_' + 
-                df_assets['state'].astype(str).str.lower().str.strip()
-            )
-            
-            df_prices['city_state_key'] = (
-                df_prices['city'].astype(str).str.lower().str.strip() + '_' + 
-                df_prices['state'].astype(str).str.lower().str.strip()
-            )
-            
-            # Merge datasets
-            merged_df = pd.merge(
-                df_assets,
-                df_prices[['city_state_key', 'latest_price_index']],
-                on='city_state_key',
-                how='left'
-            )
-        else:
-            merged_df = df_assets.copy()
-            merged_df['latest_price_index'] = np.random.uniform(50000, 800000, len(df_assets))
+        # Merge datasets
+        merged_df = pd.merge(
+            df_assets,
+            df_prices[['city_state_key', 'latest_price_index']],
+            on='city_state_key',
+            how='left'
+        )
     else:
         merged_df = df_assets.copy()
-        merged_df['latest_price_index'] = np.random.uniform(50000, 800000, len(df_assets))
+        merged_df['latest_price_index'] = np.nan  # No random; require real data
     
-    # Fill missing price indices
-    merged_df['latest_price_index'] = merged_df['latest_price_index'].fillna(
-        merged_df['latest_price_index'].median()
-    )
+    # Fill missing price indices with median if available
+    if 'latest_price_index' in merged_df.columns:
+        merged_df['latest_price_index'] = merged_df['latest_price_index'].fillna(
+            merged_df['latest_price_index'].median()
+        )
     
     # Calculate estimated values
     rentable_col = None
@@ -225,12 +199,12 @@ def clean_and_merge_data(df_assets, df_prices):
             rentable_col = col
             break
     
-    if rentable_col:
+    if rentable_col and 'latest_price_index' in merged_df.columns:
         merged_df['estimated_value'] = (
             merged_df[rentable_col] * (merged_df['latest_price_index'] / 100) * 10
         )
     else:
-        merged_df['estimated_value'] = merged_df['latest_price_index'] * np.random.uniform(0.5, 2.0, len(merged_df))
+        raise ValueError("Required columns for estimated_value calculation are missing.")
     
     # Add high-value premium for certain states
     high_value_states = ['CA', 'NY', 'MA', 'CT', 'NJ', 'HI', 'MD', 'WA']
@@ -241,24 +215,57 @@ def clean_and_merge_data(df_assets, df_prices):
     return merged_df
 
 @st.cache_data
-def perform_clustering(df, n_clusters=5):
-    """Perform clustering analysis using K-Means only"""
-    # Select numeric columns for clustering
-    numeric_cols = []
-    for col in ['latitude', 'longitude', 'estimated_value', 'building_rentable_square_feet', 'latest_price_index']:
-        if col in df.columns:
-            numeric_cols.append(col)
+def sample_data(df, sample_size=7500, random_state=4742271):
+    """Sample the dataframe with fixed size and random state"""
+    if len(df) < sample_size:
+        st.warning(f"Dataset has only {len(df)} records, using all.")
+        return df
+    return df.sample(n=sample_size, random_state=random_state)
+
+@st.cache_data
+def determine_optimal_clusters(df):
+    """Determine optimal number of clusters using Elbow method and Davies-Bouldin score"""
+    numeric_cols = [col for col in ['latitude', 'longitude', 'estimated_value', 'building_rentable_square_feet', 'latest_price_index'] if col in df.columns]
+    if not numeric_cols:
+        raise ValueError("No numeric columns for clustering.")
     
-    if len(numeric_cols) == 0:
-        st.error("No numeric columns found for clustering")
-        return df, None
-    
-    # Prepare data for clustering
     cluster_data = df[numeric_cols].fillna(df[numeric_cols].median())
     scaler = MinMaxScaler()
     scaled_data = scaler.fit_transform(cluster_data)
     
-    # K-means clustering
+    wcss = []
+    db_scores = []
+    k_range = range(2, 11)  # Start from 2 clusters
+    
+    for k in k_range:
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(scaled_data)
+        wcss.append(kmeans.inertia_)
+        db_scores.append(davies_bouldin_score(scaled_data, labels))
+    
+    # Elbow method: Find k where WCSS decrease slows (simple derivative-based)
+    diffs = np.diff(wcss)
+    elbow_k = list(k_range)[np.argmin(np.diff(diffs)) + 1]  # Approximate elbow
+    
+    # DB score: Lower is better, find min
+    optimal_db_k = list(k_range)[np.argmin(db_scores)]
+    
+    # Choose the k that appears optimal from both (average or select based on min DB)
+    optimal_k = optimal_db_k if abs(elbow_k - optimal_db_k) <= 1 else elbow_k
+    
+    return optimal_k, wcss, db_scores, list(k_range)
+
+@st.cache_data
+def perform_clustering(df, n_clusters):
+    """Perform clustering analysis using K-Means"""
+    numeric_cols = [col for col in ['latitude', 'longitude', 'estimated_value', 'building_rentable_square_feet', 'latest_price_index'] if col in df.columns]
+    if not numeric_cols:
+        raise ValueError("No numeric columns for clustering.")
+    
+    cluster_data = df[numeric_cols].fillna(df[numeric_cols].median())
+    scaler = MinMaxScaler()
+    scaled_data = scaler.fit_transform(cluster_data)
+    
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     df['cluster'] = kmeans.fit_predict(scaled_data)
     
@@ -292,15 +299,40 @@ def create_ml_features(df):
     
     return df, features
 
-def create_folium_map(df, sample_size=500):
+@st.cache_data
+def train_valuation_model(df):
+    """Train a RandomForestRegressor for asset value prediction"""
+    df, features = create_ml_features(df)
+    available_features = [f for f in features if f in df.columns]
+    
+    if 'estimated_value' not in df.columns or not available_features:
+        raise ValueError("Insufficient data for model training.")
+    
+    X = df[available_features].fillna(df[available_features].median())
+    y = df['estimated_value']
+    
+    if len(X) < 10:
+        raise ValueError("Not enough data for model training.")
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    y_pred = model.predict(X_test)
+    r2 = r2_score(y_test, y_pred)
+    accuracy_pct = r2 * 100
+    
+    return model, available_features, accuracy_pct
+
+def create_folium_map(df, sample_size=7500):
     """Create interactive Folium map with theme-agnostic tiles"""
-    # Check if we have the required columns
     if 'latitude' not in df.columns or 'longitude' not in df.columns:
         return None
     
     # Sample data for performance
     if len(df) > sample_size:
-        map_data = df.sample(n=sample_size, random_state=42)
+        map_data = df.sample(n=sample_size, random_state=4742271)
     else:
         map_data = df.copy()
     
@@ -363,33 +395,29 @@ def main():
         df_assets = load_assets_data()
         df_prices = load_housing_data()
     
-    # Show data loading status
-    if df_assets is None and df_prices is None:
-        st.warning("Could not load external data. Using sample data for demonstration.")
-        df_merged = create_sample_data()
-    else:
-        # Merge and clean data
-        with st.spinner("Processing and merging data..."):
+    # Merge and clean data
+    with st.spinner("Processing and merging data..."):
+        try:
             df_merged = clean_and_merge_data(df_assets, df_prices)
+            df_sampled = sample_data(df_merged)
+        except ValueError as e:
+            st.error(str(e))
+            return
     
-    if df_merged is None or len(df_merged) == 0:
-        st.error("No data available for analysis.")
-        return
-    
-    # Sidebar filters with enhanced UI
+    # Sidebar filters
     st.sidebar.markdown("### 🔍 Filters", unsafe_allow_html=True)
     
     # State filter
-    if 'state' in df_merged.columns:
-        states = ['All'] + sorted(df_merged['state'].unique().tolist())
+    if 'state' in df_sampled.columns:
+        states = ['All'] + sorted(df_sampled['state'].unique().tolist())
         selected_state = st.sidebar.selectbox("Select State", states)
         
         if selected_state != 'All':
-            df_filtered = df_merged[df_merged['state'] == selected_state]
+            df_filtered = df_sampled[df_sampled['state'] == selected_state]
         else:
-            df_filtered = df_merged.copy()
+            df_filtered = df_sampled.copy()
     else:
-        df_filtered = df_merged.copy()
+        df_filtered = df_sampled.copy()
         selected_state = 'All'
     
     # Value range filter
@@ -414,7 +442,7 @@ def main():
     page = st.sidebar.selectbox(
         "Choose Analysis",
         ["📊 Executive Dashboard", "🗺️ Geographic Analysis", "🎯 Clustering Analysis", 
-         "🤖 Machine Learning", "📈 Advanced Analytics"]
+         "🤖 Machine Learning", "📈 Advanced Analytics", "💰 Asset Value Prediction"]
     )
     
     # Show filtered data info with metrics
@@ -434,6 +462,8 @@ def main():
         show_machine_learning(df_filtered)
     elif page == "📈 Advanced Analytics":
         show_advanced_analytics(df_filtered)
+    elif page == "💰 Asset Value Prediction":
+        show_asset_prediction(df_sampled)  # Use sampled for training
 
 def show_executive_dashboard(df):
     """Show executive dashboard with enhanced visuals"""
@@ -568,7 +598,8 @@ def show_geographic_analysis(df):
     st.subheader("Interactive Asset Map")
     
     # Perform clustering for map colors
-    df_clustered, _ = perform_clustering(df_geo, n_clusters=5)
+    optimal_k, _, _, _ = determine_optimal_clusters(df_geo)
+    df_clustered, _ = perform_clustering(df_geo, optimal_k)
     
     # Create and display map
     map_obj = create_folium_map(df_clustered)
@@ -624,7 +655,7 @@ def show_geographic_analysis(df):
             st.info("State or value data not available")
 
 def show_clustering_analysis(df):
-    """Show clustering analysis with enhanced visuals"""
+    """Show clustering analysis with optimal k determination"""
     st.header("🎯 Clustering Analysis")
     
     # Check if we have necessary data
@@ -642,45 +673,55 @@ def show_clustering_analysis(df):
         st.warning("No valid data for clustering analysis.")
         return
     
-    # Clustering parameters
-    col1, col2 = st.columns([1, 3])
+    # Determine optimal clusters
+    st.subheader("Optimal Cluster Determination")
+    optimal_k, wcss, db_scores, k_range = determine_optimal_clusters(df_clean)
     
-    with col1:
-        n_clusters = st.slider("Number of Clusters", min_value=2, max_value=10, value=5)
+    # Elbow curve
+    fig_elbow = go.Figure()
+    fig_elbow.add_trace(go.Scatter(x=list(k_range), y=wcss, mode='lines+markers', name='WCSS'))
+    fig_elbow.update_layout(title="Elbow Method (WCSS)", xaxis_title="Number of Clusters", yaxis_title="WCSS")
+    st.plotly_chart(fig_elbow)
+    
+    # DB scores
+    fig_db = go.Figure()
+    fig_db.add_trace(go.Scatter(x=list(k_range), y=db_scores, mode='lines+markers', name='DB Score'))
+    fig_db.update_layout(title="Davies-Bouldin Scores", xaxis_title="Number of Clusters", yaxis_title="DB Score (Lower is Better)")
+    st.plotly_chart(fig_db)
+    
+    st.info(f"Optimal number of clusters determined: {optimal_k}")
+    
+    # Perform clustering with optimal k
+    df_clustered, model = perform_clustering(df_clean, optimal_k)
+    
+    # Cluster visualization
+    if 'latitude' in df_clustered.columns and 'longitude' in df_clustered.columns:
+        sample_size = min(7500, len(df_clustered))
+        sample_data = df_clustered.sample(n=sample_size, random_state=4742271)
         
-        # Perform K-means clustering only
-        df_clustered, model = perform_clustering(df_clean, n_clusters=n_clusters)
-    
-    with col2:
-        # Cluster visualization with enhanced mapbox
-        if 'latitude' in df_clustered.columns and 'longitude' in df_clustered.columns:
-            sample_size = min(1000, len(df_clustered))
-            sample_data = df_clustered.sample(n=sample_size, random_state=42)
-            
-            fig = px.scatter_mapbox(
-                sample_data,
-                lat="latitude",
-                lon="longitude",
-                color="cluster",
-                size="estimated_value" if 'estimated_value' in sample_data.columns else None,
-                hover_data={'estimated_value': ':$,.0f'} if 'estimated_value' in sample_data.columns else None,
-                mapbox_style="open-street-map",
-                zoom=3,
-                height=600,
-                title="Asset Clusters Geographic Distribution",
-                color_continuous_scale=px.colors.qualitative.Pastel1
-            )
-            fig.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)'
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        fig = px.scatter_mapbox(
+            sample_data,
+            lat="latitude",
+            lon="longitude",
+            color="cluster",
+            size="estimated_value" if 'estimated_value' in sample_data.columns else None,
+            hover_data={'estimated_value': ':$,.0f'} if 'estimated_value' in sample_data.columns else None,
+            mapbox_style="open-street-map",
+            zoom=3,
+            height=600,
+            title="Asset Clusters Geographic Distribution",
+            color_continuous_scale=px.colors.qualitative.Pastel1
+        )
+        fig.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
+        )
+        st.plotly_chart(fig, use_container_width=True)
     
     # Cluster analysis
     st.subheader("📊 Cluster Analysis")
     
     if 'cluster' in df_clustered.columns:
-        # Filter out noise points if any
         valid_clusters = df_clustered[df_clustered['cluster'] >= 0]
         
         if len(valid_clusters) > 0:
@@ -718,10 +759,10 @@ def show_clustering_analysis(df):
                 )
                 st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning("No valid clusters found with current parameters.")
+            st.warning("No valid clusters found.")
 
 def show_machine_learning(df):
-    """Show machine learning analysis with enhanced UI"""
+    """Show machine learning analysis"""
     st.header("🤖 Machine Learning Analysis")
     
     if 'estimated_value' not in df.columns:
@@ -753,7 +794,7 @@ def show_machine_learning(df):
         st.warning("Not enough data for meaningful ML analysis.")
         return
     
-    # ML tasks with selectbox
+    # ML tasks
     task = st.selectbox("Select ML Task", 
                        ["Value Prediction (Regression)", "Value Classification", "High-Value Detection"])
     
@@ -781,7 +822,7 @@ def show_machine_learning(df):
                     
                     st.metric("R² Score", f"{r2:.3f}")
                     
-                    # Feature importance with enhanced bar
+                    # Feature importance
                     feature_importance = pd.DataFrame({
                         'feature': available_features,
                         'importance': model.feature_importances_
@@ -829,7 +870,7 @@ def show_machine_learning(df):
                         
                         st.metric("Accuracy", f"{accuracy:.3f}")
                         
-                        # Class distribution with pie
+                        # Class distribution
                         class_dist = y.value_counts()
                         fig = px.pie(
                             values=class_dist.values,
@@ -874,7 +915,7 @@ def show_machine_learning(df):
                     st.metric("Accuracy", f"{accuracy:.3f}")
                     st.metric("High-Value Threshold", f"${threshold/1e6:.1f}M")
                     
-                    # Distribution with bar
+                    # Distribution
                     dist_data = pd.DataFrame({
                         'Category': ['Regular Value', 'High Value'],
                         'Count': [(y == 0).sum(), (y == 1).sum()]
@@ -1005,7 +1046,6 @@ def show_advanced_analytics(df):
             # State-wise analysis
             agg_dict = {'estimated_value': ['count', 'sum', 'mean']}
             
-            # Add square feet if available
             if 'building_rentable_square_feet' in df.columns:
                 agg_dict['building_rentable_square_feet'] = 'mean'
             
@@ -1046,6 +1086,39 @@ def show_advanced_analytics(df):
                 st.info("No state data available for trend analysis.")
         else:
             st.info("Required data (state, estimated_value) not available for trend analysis.")
+
+def show_asset_prediction(df):
+    """Show asset value prediction model and input form"""
+    st.header("💰 Asset Value Prediction")
+    
+    try:
+        model, features, accuracy_pct = train_valuation_model(df)
+        st.success(f"Model trained successfully with accuracy: {accuracy_pct:.2f}% (R² score)")
+        
+        # Input form for prediction
+        st.subheader("Predict Asset Value")
+        input_data = {}
+        for feature in features:
+            if 'distance_to' in feature:
+                # For distances, perhaps not user-inputtable; skip or approximate
+                continue
+            elif feature in ['latitude', 'longitude', 'latest_price_index', 'building_rentable_square_feet']:
+                min_val = df[feature].min()
+                max_val = df[feature].max()
+                input_data[feature] = st.number_input(f"Enter {feature.replace('_', ' ').title()}", min_value=float(min_val), max_value=float(max_val), value=float(df[feature].mean()))
+        
+        if st.button("Predict Value"):
+            input_df = pd.DataFrame([input_data])
+            # Add any missing features (e.g., distances) with defaults or calculations if needed
+            for f in features:
+                if f not in input_df.columns:
+                    input_df[f] = 0  # Default; adjust if necessary
+            
+            prediction = model.predict(input_df[features])
+            st.success(f"Predicted Asset Value: ${prediction[0]:,.2f}")
+    
+    except ValueError as e:
+        st.error(str(e))
 
 if __name__ == "__main__":
     main()
