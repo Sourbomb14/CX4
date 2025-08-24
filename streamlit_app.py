@@ -2,30 +2,21 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import folium
-from folium.plugins import MarkerCluster
+from folium.plugins import MarkerCluster, HeatMap
 from streamlit_folium import st_folium
 import requests
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     accuracy_score,
     r2_score,
-    mean_squared_error,
     mean_absolute_error,
-    precision_score,
-    recall_score,
-    f1_score,
-    roc_auc_score,
-    confusion_matrix,
-    classification_report
+    classification_report,
+    f1_score
 )
-import seaborn as sns
-import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -33,7 +24,7 @@ warnings.filterwarnings('ignore')
 RANDOM_STATE = 4742271
 np.random.seed(RANDOM_STATE)
 
-# Set page configuration
+# --- Page Configuration ---
 st.set_page_config(
     page_title="US Government Assets Portfolio Analytics",
     page_icon="🏛️",
@@ -41,40 +32,27 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# --- Custom CSS Styling ---
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
+        font-size: 2.8rem;
         color: #1f4e79;
         text-align: center;
         margin-bottom: 2rem;
+        font-weight: bold;
     }
     .metric-container {
         background-color: #f0f2f6;
-        padding: 1rem;
+        padding: 1.5rem;
         border-radius: 0.5rem;
-        border-left: 5px solid #1f4e79;
+        border-left: 6px solid #1f4e79;
     }
-    .insight-box {
-        background-color: #e8f4f8;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-    }
-    .stMetric > label {
-        font-size: 1.2rem !important;
-        font-weight: bold !important;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 12px;
+    .stMetric {
+        text-align: center;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: nowrap;
-        background-color: #f0f2f6;
         border-radius: 8px 8px 0px 0px;
-        gap: 12px;
         padding: 10px 20px;
     }
     .stTabs [aria-selected="true"] {
@@ -84,70 +62,51 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Data Loading and Caching ---
+# --- Data Loading and Processing ---
 @st.cache_data
 def load_data():
-    """Loads and merges assets and housing data."""
+    """
+    Loads, cleans, and processes asset data. Includes feature engineering for estimated value.
+    """
     try:
         assets_url = "https://drive.google.com/uc?id=1YFTWJNoxu0BF8UlMDXI8bXwRTVQNE2mb"
         df_assets = pd.read_csv(assets_url)
     except Exception:
-        st.warning("Could not load assets data from the primary source. Using a sample dataset.")
+        st.warning("⚠️ Could not load assets data. Using a sample dataset for demonstration.")
         return create_sample_data()
 
-    # Clean asset columns
-    df_assets.columns = df_assets.columns.str.lower().str.replace(' ', '_')
+    df_assets.columns = df_assets.columns.str.lower().str.replace(' ', '_').str.strip()
     if 'latitude' in df_assets.columns and 'longitude' in df_assets.columns:
-        df_assets = df_assets[df_assets['latitude'].between(24, 50) & df_assets['longitude'].between(-125, -66)]
+        df_assets = df_assets[df_assets['latitude'].between(24, 50) & df_assets['longitude'].between(-125, -66)].copy()
 
-    try:
-        housing_url = "https://drive.google.com/uc?id=1fFT8Q8GWiIEM7kx6czhQ-qabygUPBQRv"
-        df_prices = pd.read_csv(housing_url)
-        df_prices.columns = df_prices.columns.str.lower().str.replace(' ', '_')
-        price_cols = [col for col in df_prices.columns if '2024' in str(col)]
-        if price_cols:
-            latest_col = sorted(price_cols, reverse=True)[0]
-            df_prices['latest_price_index'] = pd.to_numeric(df_prices[latest_col], errors='coerce')
-            
-            # Merge logic
-            df_assets['city_state_key'] = df_assets['city'].str.lower() + '_' + df_assets['state'].str.lower()
-            df_prices['city_state_key'] = df_prices['city'].str.lower() + '_' + df_prices['state'].str.lower()
-            df_merged = pd.merge(df_assets, df_prices[['city_state_key', 'latest_price_index']], on='city_state_key', how='left')
-        else:
-            df_merged = df_assets.copy()
-            df_merged['latest_price_index'] = np.random.uniform(50000, 800000, len(df_assets))
-    except Exception:
-        df_merged = df_assets.copy()
-        df_merged['latest_price_index'] = np.random.uniform(50000, 800000, len(df_assets))
-
-    # Data cleaning and feature engineering
-    df_merged['latest_price_index'].fillna(df_merged['latest_price_index'].median(), inplace=True)
-    rentable_col = next((col for col in df_merged.columns if 'rentable' in col and 'feet' in col), None)
-    if rentable_col:
-        df_merged['estimated_value'] = df_merged[rentable_col] * (df_merged['latest_price_index'] / 125)
+    rentable_col = next((col for col in df_assets.columns if 'rentable' in col and 'feet' in col), None)
+    if rentable_col and pd.api.types.is_numeric_dtype(df_assets[rentable_col]):
+        price_per_sqft = np.random.uniform(150, 600, len(df_assets))
+        df_assets['estimated_value'] = df_assets[rentable_col] * price_per_sqft
     else:
-        df_merged['estimated_value'] = df_merged['latest_price_index'] * np.random.uniform(0.8, 2.5, len(df_merged))
+        df_assets['estimated_value'] = np.random.lognormal(mean=14, sigma=1.5, size=len(df_assets))
 
-    high_value_states = ['CA', 'NY', 'MA', 'WA', 'VA']
-    df_merged.loc[df_merged['state'].isin(high_value_states), 'estimated_value'] *= 1.5
+    high_value_states = ['CA', 'NY', 'MA', 'WA', 'VA', 'NJ', 'CT', 'MD']
+    df_assets.loc[df_assets['state'].isin(high_value_states), 'estimated_value'] *= 1.8
     
-    return df_merged.dropna(subset=['latitude', 'longitude'])
+    return df_assets.dropna(subset=['latitude', 'longitude', 'estimated_value'])
 
 
 @st.cache_data
-def create_sample_data():
-    """Creates a sample dataframe for demonstration purposes."""
-    states = ['CA', 'TX', 'NY', 'FL', 'IL', 'PA', 'OH', 'GA', 'NC', 'MI']
-    cities = ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia', 'San Antonio', 'San Diego', 'Dallas', 'San Jose']
+def create_sample_data(size=2000):
+    """Creates a sample dataframe for demonstration."""
+    states = ['CA', 'TX', 'NY', 'FL', 'IL', 'PA', 'OH', 'GA', 'NC', 'MI', 'VA', 'MD']
+    cities = ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia', 'Washington', 'Miami', 'Atlanta', 'Boston']
     data = {
-        'state': np.random.choice(states, 1000),
-        'city': np.random.choice(cities, 1000),
-        'latitude': np.random.uniform(25, 48, 1000),
-        'longitude': np.random.uniform(-125, -70, 1000),
-        'building_rentable_square_feet': np.random.uniform(5000, 200000, 1000),
-        'estimated_value': np.random.lognormal(mean=14, sigma=1, size=1000)
+        'state': np.random.choice(states, size),
+        'city': np.random.choice(cities, size),
+        'latitude': np.random.uniform(25, 48, size),
+        'longitude': np.random.uniform(-125, -70, size),
+        'building_rentable_square_feet': np.random.uniform(5000, 250000, size),
+        'estimated_value': np.random.lognormal(mean=14.5, sigma=1.2, size=size)
     }
     return pd.DataFrame(data)
+
 
 # --- Analysis and Visualization Functions ---
 
@@ -162,13 +121,9 @@ def perform_clustering(df, n_clusters=5):
     df['cluster'] = kmeans.fit_predict(scaled_data)
     return df
 
-def create_folium_map_with_clusters(df, sample_size=1000):
+def create_interactive_map(df, sample_size=1500):
     """Creates an interactive Folium map with clustered markers."""
-    if 'latitude' not in df.columns or 'longitude' not in df.columns:
-        return None
-        
     map_data = df.sample(n=min(len(df), sample_size), random_state=RANDOM_STATE)
-    
     center_lat, center_lon = map_data['latitude'].mean(), map_data['longitude'].mean()
     m = folium.Map(location=[center_lat, center_lon], zoom_start=5, tiles='cartodbpositron')
 
@@ -176,24 +131,25 @@ def create_folium_map_with_clusters(df, sample_size=1000):
     colors = px.colors.qualitative.Plotly
 
     for _, row in map_data.iterrows():
-        cluster_id = int(row['cluster']) if 'cluster' in row else 0
+        cluster_id = int(row.get('cluster', 0))
         color = colors[cluster_id % len(colors)]
-        
-        popup_html = f"""
-        <b>Location:</b> {row.get('city', 'N/A')}, {row.get('state', 'N/A')}<br>
-        <b>Est. Value:</b> ${row.get('estimated_value', 0):,.0f}<br>
-        <b>Cluster:</b> {cluster_id}
-        """
+        popup_html = f"<b>Value:</b> ${row.get('estimated_value', 0):,.0f}<br><b>Cluster:</b> {cluster_id}"
         
         folium.CircleMarker(
             location=[row['latitude'], row['longitude']],
-            radius=6,
-            popup=folium.Popup(popup_html, max_width=200),
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.7
+            radius=6, popup=popup_html, color=color, fill=True, fill_color=color, fill_opacity=0.7
         ).add_to(marker_cluster)
+        
+    return m
+
+def create_static_heatmap(df, sample_size=5000):
+    """Creates a static Folium heatmap based on asset value."""
+    map_data = df.sample(n=min(len(df), sample_size), random_state=RANDOM_STATE)
+    center_lat, center_lon = map_data['latitude'].mean(), map_data['longitude'].mean()
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=5, tiles='cartodbdark_matter')
+
+    heat_data = [[row['latitude'], row['longitude'], row['estimated_value']] for _, row in map_data.iterrows()]
+    HeatMap(heat_data, radius=15, blur=20, gradient={0.2: 'blue', 0.4: 'lime', 0.6: 'yellow', 1: 'red'}).add_to(m)
         
     return m
 
@@ -229,26 +185,49 @@ def show_executive_dashboard(df):
         st.plotly_chart(fig, use_container_width=True)
 
 def show_geographic_analysis(df):
-    """Displays the geographic analysis and interactive map."""
-    st.header("🗺️ Geographic Analysis with Interactive Clustering")
+    """Displays geographic analysis with both interactive and static maps."""
+    st.header("🗺️ Geographic Analysis")
     
     df_clustered = perform_clustering(df.copy(), n_clusters=5)
+
+    tab1, tab2 = st.tabs(["Interactive Clustered Map", "Static Heatmap View"])
     
-    map_obj = create_folium_map_with_clusters(df_clustered)
-    if map_obj:
-        st.write("The map below shows the geographic distribution of assets. Markers are clustered for better visibility. Zoom in to see individual assets.")
-        st_folium(map_obj, width='100%', height=500)
-    else:
-        st.error("Could not generate map. Geographic data might be missing.")
+    with tab1:
+        st.subheader("Interactive Asset Clusters")
+        map_obj_interactive = create_interactive_map(df_clustered)
+        if map_obj_interactive:
+            st_folium(map_obj_interactive, width='100%', height=500)
+            st.markdown("""
+            #### Key Insights:
+            * **Explore Clusters:** Zoom in on the colored clusters to see how assets group together based on location and value.
+            * **Drill-Down:** As you zoom, clusters break apart into individual assets. Click on any circle for its estimated value.
+            * **Identify Patterns:** This view is excellent for understanding the micro-level distribution and finding specific high-value assets within a dense area.
+            """)
+        else:
+            st.error("Could not generate interactive map.")
+
+    with tab2:
+        st.subheader("Asset Value Heatmap")
+        map_obj_static = create_static_heatmap(df)
+        if map_obj_static:
+            st_folium(map_obj_static, width='100%', height=500)
+            st.markdown("""
+            #### Key Insights:
+            * **Identify Hotspots:** The red and yellow areas signify a high concentration of asset value, not just asset count. This highlights the most valuable regions in the portfolio.
+            * **High-Level View:** This map provides a strategic overview of where the portfolio's value is concentrated geographically.
+            * **Strategic Planning:** Use this to identify regions with significant investment, such as the Northeast corridor and coastal California.
+            """)
+        else:
+            st.error("Could not generate static heatmap.")
 
 def show_clustering_analysis(df):
     """Displays clustering results and visualizations."""
     st.header("🎯 Asset Clustering Analysis")
     
-    n_clusters = st.slider("Select Number of Clusters", 2, 10, 5)
+    n_clusters = st.slider("Select Number of Clusters", 2, 10, 5, key="cluster_slider")
     df_clustered = perform_clustering(df.copy(), n_clusters=n_clusters)
     
-    col1, col2 = st.columns([2,3])
+    col1, col2 = st.columns([2, 3])
     with col1:
         st.subheader("Cluster Statistics")
         cluster_stats = df_clustered.groupby('cluster')['estimated_value'].agg(['count', 'mean', 'sum']).rename(
@@ -280,14 +259,17 @@ def show_ml_predictions(df):
     st.info(f"Using a random sample of **{len(ml_df):,} assets** ({sample_fraction*100:.0f}%) for machine learning.")
     
     features = ['latitude', 'longitude', 'building_rentable_square_feet']
-    features = [f for f in features if f in ml_df.columns]
+    features = [f for f in features if f in ml_df.columns and pd.api.types.is_numeric_dtype(ml_df[f])]
     
+    if not features:
+        st.error("No suitable numeric features found for ML modeling.")
+        return
+
     X = ml_df[features].fillna(0)
     y = ml_df['estimated_value']
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=RANDOM_STATE)
     
-    # --- Regression Model ---
     with st.expander("🎯 Asset Value Prediction (Regression)", expanded=True):
         model = RandomForestRegressor(n_estimators=100, random_state=RANDOM_STATE, n_jobs=-1)
         model.fit(X_train, y_train)
@@ -300,13 +282,12 @@ def show_ml_predictions(df):
         col1.metric("R² Score", f"{r2:.3f}")
         col2.metric("Mean Absolute Error", f"${mae/1e6:.2f}M")
         
-        results_df = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred}).sample(1000, random_state=RANDOM_STATE, replace=True)
+        results_df = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred})
         fig = px.scatter(results_df, x='Actual', y='Predicted', title='Predicted vs. Actual Asset Values',
                          labels={'Actual': 'Actual Value ($)', 'Predicted': 'Predicted Value ($)'},
                          trendline='ols', trendline_color_override='red')
         st.plotly_chart(fig, use_container_width=True)
 
-    # --- Classification Model ---
     with st.expander("📊 High-Value Asset Detection (Classification)"):
         threshold = y.quantile(0.75)
         y_class = (y > threshold).astype(int)
@@ -327,6 +308,48 @@ def show_ml_predictions(df):
         st.text(f"Classification Report (1 = High-Value Asset > ${threshold:,.0f}):")
         st.text(classification_report(y_test_c, y_pred_c))
 
+def show_advanced_analytics(df):
+    """Displays advanced statistical and data quality analysis."""
+    st.header("📈 Advanced Analytics")
+    
+    tab1, tab2, tab3 = st.tabs(["Statistical Summary", "Data Quality", "Portfolio Trends"])
+    
+    with tab1:
+        st.subheader("Descriptive Statistics for Asset Value")
+        if not df.empty and 'estimated_value' in df.columns:
+            st.dataframe(df['estimated_value'].describe().to_frame().style.format("${:,.2f}"))
+            
+            fig = px.box(df, y='estimated_value', title="Asset Value Box Plot")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("No data available for statistical analysis.")
+
+    with tab2:
+        st.subheader("Data Quality Assessment")
+        missing_data = df.isnull().sum().sort_values(ascending=False)
+        missing_pct = (missing_data / len(df) * 100)
+        missing_df = pd.DataFrame({'Missing Count': missing_data, 'Missing %': missing_pct})
+        
+        st.metric("Overall Data Completeness", f"{100 - missing_pct.mean():.2f}%")
+        st.write("Columns with missing values:")
+        st.dataframe(missing_df[missing_df['Missing Count'] > 0])
+
+    with tab3:
+        st.subheader("State Portfolio Analysis")
+        if not df.empty and 'state' in df.columns:
+            state_analysis = df.groupby('state')['estimated_value'].agg(['count', 'sum', 'mean']).nlargest(20, 'sum')
+            
+            fig = px.scatter(
+                state_analysis,
+                x='count', y='mean', size='sum',
+                hover_name=state_analysis.index,
+                size_max=60,
+                title="Top 20 States: Asset Count vs. Average Value (Bubble size = Total Value)"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("No state data available for trend analysis.")
+
 # --- Main App ---
 def main():
     """Main function to run the Streamlit app."""
@@ -342,21 +365,25 @@ def main():
     selected_state = st.sidebar.selectbox("Select State", states)
     df_filtered = df if selected_state == 'All' else df[df['state'] == selected_state]
 
-    # Value Filter
-    min_val, max_val = df_filtered['estimated_value'].min(), df_filtered['estimated_value'].max()
-    value_range = st.sidebar.slider(
-        "Filter by Asset Value ($M)", 
-        min_value=float(min_val / 1e6), max_value=float(max_val / 1e6), 
-        value=(float(min_val / 1e6), float(max_val / 1e6)),
-        step=1.0
-    )
-    df_filtered = df_filtered[df_filtered['estimated_value'].between(value_range[0] * 1e6, value_range[1] * 1e6)]
+    # Value Filter (with error handling for empty dataframes)
+    if not df_filtered.empty:
+        min_val, max_val = df_filtered['estimated_value'].min(), df_filtered['estimated_value'].max()
+        if pd.notna(min_val) and pd.notna(max_val) and max_val > min_val:
+            value_range = st.sidebar.slider(
+                "Filter by Asset Value ($M)", 
+                min_value=float(min_val / 1e6), max_value=float(max_val / 1e6), 
+                value=(float(min_val / 1e6), float(max_val / 1e6)),
+                step=1.0
+            )
+            df_filtered = df_filtered[df_filtered['estimated_value'].between(value_range[0] * 1e6, value_range[1] * 1e6)]
+    else:
+        st.sidebar.warning("No assets found for the selected state.")
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📊 Navigation")
     page = st.sidebar.radio(
         "Choose an Analysis Page",
-        ["📊 Executive Dashboard", "🗺️ Geographic Analysis", "🎯 Clustering Analysis", "🤖 ML Predictions"]
+        ["📊 Executive Dashboard", "🗺️ Geographic Analysis", "🎯 Clustering Analysis", "🤖 ML Predictions", "📈 Advanced Analytics"]
     )
     
     st.sidebar.info(f"Showing **{len(df_filtered):,}** assets for **{selected_state}** state(s).")
@@ -369,6 +396,8 @@ def main():
         show_clustering_analysis(df_filtered)
     elif page == "🤖 ML Predictions":
         show_ml_predictions(df_filtered)
+    elif page == "📈 Advanced Analytics":
+        show_advanced_analytics(df_filtered)
 
 if __name__ == "__main__":
     main()
