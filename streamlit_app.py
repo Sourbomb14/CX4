@@ -306,69 +306,9 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("🔗 Intelligent Merge (ZIP / City-State) + Valuation")
 
-    # Work on copies to avoid cache mutation issues
-    dfA = df_assets.copy()
-    dfP = df_prices.copy()
+    # ... (same merging logic up to value computation)
 
-    # Standardize ZIPs
-    if 'zip_code' in dfA.columns:
-        dfA['zip_code_clean'] = dfA['zip_code'].apply(clean_zip_code)
-
-    zip_col_prices = None
-    for c in dfP.columns:
-        if 'zip' in c:
-            zip_col_prices = c
-            break
-    if zip_col_prices:
-        dfP['zip_code_clean'] = dfP[zip_col_prices].apply(clean_zip_code)
-
-    merged_datasets = {}
-
-    # Strategy 1: ZIP merge
-    if 'zip_code_clean' in dfA.columns and 'zip_code_clean' in dfP.columns:
-        m1 = pd.merge(dfA, dfP[['zip_code_clean', 'latest_price_index']], on='zip_code_clean', how='left')
-        merged_datasets["zip_merge"] = m1
-
-    # Strategy 2: City-State merge (if both exist)
-    city_col_prices = next((c for c in dfP.columns if 'city' in c), None)
-    state_col_prices = next((c for c in dfP.columns if 'state' in c), None)
-    if all([city_col_prices, state_col_prices]) and all([(c in dfA.columns) for c in ['city','state']]):
-        dfA['city_state_key'] = dfA['city'].str.lower().str.strip() + "_" + dfA['state'].str.lower().str.strip()
-        dfP['city_state_key'] = dfP[city_col_prices].str.lower().str.strip() + "_" + dfP[state_col_prices].str.lower().str.strip()
-        m2 = pd.merge(dfA, dfP[['city_state_key','latest_price_index']], on='city_state_key', how='left')
-        merged_datasets["city_state_merge"] = m2
-
-    # Pick the merge with most matches
-    if merged_datasets:
-        best_name = max(merged_datasets, key=lambda k: merged_datasets[k]['latest_price_index'].notna().sum())
-        df_merged = merged_datasets[best_name].copy()
-        st.success(f"Selected **{best_name}** (most price matches).")
-    else:
-        df_merged = dfA.copy()
-        df_merged['latest_price_index'] = 100.0
-        st.warning("No merge keys found; used fallback with baseline latest_price_index.")
-
-    # Fill missing price indices with regional mean then overall median
-    if 'state' in df_merged.columns:
-        state_avg = df_merged.groupby('state')['latest_price_index'].mean()
-        mask = df_merged['latest_price_index'].isna()
-        for s, v in state_avg.items():
-            row_mask = (df_merged['state'] == s) & mask
-            df_merged.loc[row_mask, 'latest_price_index'] = v
-    overall_med = df_merged['latest_price_index'].median()
-    df_merged['latest_price_index'] = df_merged['latest_price_index'].fillna(overall_med)
-
-    # Identify rentable sqft column
-    sqft_cols = [c for c in df_merged.columns if 'sqft' in c or 'sq_ft' in c or 'area' in c]
-    rentable_col = None
-    for c in sqft_cols:
-        if 'rentable' in c:
-            rentable_col = c
-            break
-    if not rentable_col and sqft_cols:
-        rentable_col = sqft_cols[0]
-
-    # Estimated value (replicating your logic, with state premium)
+    # Estimated value
     if rentable_col:
         df_merged[rentable_col] = safe_number_series(df_merged[rentable_col]).fillna(0)
         df_merged['estimated_value'] = df_merged[rentable_col] * (df_merged['latest_price_index'] / 100.0) * 10.0
@@ -380,14 +320,24 @@ with tabs[3]:
         premium_mask = df_merged['state'].isin(high_value_states)
         df_merged.loc[premium_mask, 'estimated_value'] *= 1.5
 
+    # ✅ Safe scoring helper
+    def safe_qcut(series, q=5, labels=None):
+        series = series.fillna(0)
+        if series.nunique() < q:  # too few unique values for qcut
+            return pd.Series([1] * len(series), index=series.index, dtype=float)
+        try:
+            return pd.qcut(series, q, labels=labels, duplicates="drop").astype(float)
+        except Exception:
+            return pd.Series([1] * len(series), index=series.index, dtype=float)
+
     # Scores
     scoring_cols = []
     if rentable_col:
-        df_merged['size_score'] = pd.qcut(df_merged[rentable_col].fillna(0), 5, labels=[1,2,3,4,5]).astype(float)
+        df_merged['size_score'] = safe_qcut(df_merged[rentable_col], 5, labels=[1,2,3,4,5])
         scoring_cols.append('size_score')
-    df_merged['location_score'] = pd.qcut(df_merged['latest_price_index'], 5, labels=[1,2,3,4,5]).astype(float)
+    df_merged['location_score'] = safe_qcut(df_merged['latest_price_index'], 5, labels=[1,2,3,4,5])
     scoring_cols.append('location_score')
-    df_merged['value_score'] = pd.qcut(df_merged['estimated_value'], 5, labels=[1,2,3,4,5]).astype(float)
+    df_merged['value_score'] = safe_qcut(df_merged['estimated_value'], 5, labels=[1,2,3,4,5])
     scoring_cols.append('value_score')
     df_merged['composite_score'] = df_merged[scoring_cols].mean(axis=1)
 
@@ -417,7 +367,6 @@ with tabs[3]:
 # ======================================================================================
 with tabs[4]:
     st.subheader("🗺️ Spatial Mapping")
-
     df_merged = st.session_state.get("df_merged", None)
     if df_merged is None:
         st.warning("Run the Merge tab first.")
@@ -455,12 +404,13 @@ with tabs[4]:
                     if heat_data:
                         HeatMap(heat_data, name="Value Heatmap", min_opacity=0.3, radius=15, blur=10).add_to(fmap)
 
-                # Value markers
+              # Value markers
                 if show_markers:
                     vmin, vmax = df_geo['estimated_value'].min(), df_geo['estimated_value'].max()
                     colors = ['blue', 'green', 'orange', 'red', 'purple']
                     try:
-                        q = pd.qcut(df_geo['estimated_value'], 5, labels=False, duplicates='drop')
+                        # ✅ use safe_qcut for markers too
+                        q = safe_qcut(df_geo['estimated_value'], 5, labels=False)
                     except Exception:
                         q = pd.Series(0, index=df_geo.index)
 
@@ -501,7 +451,7 @@ with tabs[4]:
                 st_folium(fmap, width=None, height=640)
 
 # ======================================================================================
-# 6) CLUSTERING & SCORING (DBSCAN in EPSG:3857)
+# 6) CLUSTERING & SCORING
 # ======================================================================================
 with tabs[5]:
     st.subheader("🔬 Clustering & Scoring")
