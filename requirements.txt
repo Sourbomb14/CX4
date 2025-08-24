@@ -2,13 +2,12 @@ streamlit
 pandas
 numpy
 plotly
+plotly-express
 folium
 streamlit-folium
-geopandas
 scikit-learn
+requests
 seaborn
 matplotlib
-requests
-Pillow
+geopandas
 shapely
-scipy
