@@ -5,11 +5,10 @@ geopandas
 shapely
 fiona
 pyproj
-pysal
-esda
-libpysal
-geopy
 folium
 streamlit-folium
-pydeck
+plotly
 matplotlib
+scipy
+scikit-learn
+gdown
