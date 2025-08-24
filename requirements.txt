@@ -5,8 +5,6 @@ geopandas
 shapely
 fiona
 pyproj
-rasterio
-GDAL
 pysal
 esda
 libpysal
@@ -15,5 +13,3 @@ folium
 streamlit-folium
 pydeck
 matplotlib
-# Optional remote sensing (Linux/macOS typically)
-rsgislib; platform_system != "Windows"
