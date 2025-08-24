@@ -4,9 +4,9 @@ numpy
 plotly
 folium
 streamlit-folium
+geopandas
+shapely
 requests
 scikit-learn
 seaborn
 matplotlib
-geopandas
-shapely
