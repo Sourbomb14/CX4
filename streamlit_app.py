@@ -27,24 +27,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Enhanced Custom CSS for aesthetic appeal
+# Enhanced Custom CSS for aesthetic appeal, theme-agnostic
 st.markdown("""
 <style>
-    /* Global styling */
-    .main {
-        background-color: #f8f9fa;
-        padding: 1rem;
-    }
+    /* Global styling - avoid fixed backgrounds to support light/dark themes */
     .main-header {
         font-size: 2.8rem;
-        color: #1f4e79;
+        color: var(--text-color); /* Use Streamlit theme variables */
         text-align: center;
         margin-bottom: 1.5rem;
         font-weight: bold;
         text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
     }
     .metric-container {
-        background-color: #ffffff;
         padding: 1.5rem;
         border-radius: 10px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -56,7 +51,6 @@ st.markdown("""
         box-shadow: 0 6px 8px rgba(0,0,0,0.15);
     }
     .insight-box {
-        background-color: #e8f4f8;
         padding: 1.5rem;
         border-radius: 10px;
         margin: 1rem 0;
@@ -66,7 +60,7 @@ st.markdown("""
     .stMetric > label {
         font-size: 1.3rem !important;
         font-weight: bold !important;
-        color: #1f4e79;
+        color: var(--text-color);
     }
     .stMetric > div {
         font-size: 2rem !important;
@@ -74,11 +68,7 @@ st.markdown("""
     }
     /* Sidebar styling */
     [data-testid="stSidebar"] {
-        background-color: #1f4e79;
-        color: white;
-    }
-    [data-testid="stSidebar"] .css-1d391kg {
-        color: white !important;
+        color: inherit;
     }
     /* Button styling */
     .stButton > button {
@@ -95,7 +85,6 @@ st.markdown("""
     }
     /* Chart containers */
     .stPlotlyChart {
-        background-color: white;
         border-radius: 10px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         padding: 1rem;
@@ -304,7 +293,7 @@ def create_ml_features(df):
     return df, features
 
 def create_folium_map(df, sample_size=500):
-    """Create interactive Folium map with enhanced visuals"""
+    """Create interactive Folium map with theme-agnostic tiles"""
     # Check if we have the required columns
     if 'latitude' not in df.columns or 'longitude' not in df.columns:
         return None
@@ -325,8 +314,8 @@ def create_folium_map(df, sample_size=500):
     center_lat = map_data['latitude'].mean()
     center_lon = map_data['longitude'].mean()
     
-    # Create map with dark theme for aesthetic appeal
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=4, tiles='CartoDB dark_matter')
+    # Create map with neutral theme (OpenStreetMap) for light/dark compatibility
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=4, tiles='openstreetmap')
     
     # Add markers with enhanced popups
     colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40']
