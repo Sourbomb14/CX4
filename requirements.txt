@@ -6,7 +6,7 @@ geopandas
 folium
 streamlit-folium
 shapely
-pysal
 requests
 scikit-learn
-geopy
+matplotlib
+seaborn
