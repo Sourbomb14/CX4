@@ -1,144 +1,79 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import geopandas as gpd
+from shapely.geometry import Point
+from sklearn.cluster import KMeans
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import r2_score
 import plotly.express as px
-import plotly.graph_objects as go
 import folium
 from streamlit_folium import st_folium
+from pysal.explore import esda
+from pysal.lib import weights
+from geopy.geocoders import Nominatim
 import requests
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import davies_bouldin_score, r2_score
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
+import warnings
+warnings.filterwarnings('ignore')
 
-st.set_page_config(
-    page_title="US Government Assets Portfolio Analytics",
-    page_icon="🏛️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="US Asset Analytics", page_icon="🏛️", layout="wide")
 
-# --- MODERN CARD DASHBOARD CSS ---
+# CSS for cards layout
 st.markdown("""
 <style>
-.dashboard-header {
-    display: flex;
-    align-items: center;
-    margin-bottom: 2.3rem;
-}
-.dashboard-icon {
-    width: 54px;
-    height: 54px;
-    margin-right: 1rem;
-}
-.dashboard-title {
-    font-size: 2.3rem;
-    font-weight: 700;
-    color: var(--text-color);
-    margin-bottom: 0;
-}
-.card-metric-row {
-    display: flex;
-    gap: 2.2rem;
-    margin-bottom: 2.5rem;
-    margin-right: 2rem;
-}
-.metric-card {
-    flex: 1;
-    background: var(--background-color);
-    border-radius: 1.1rem;
-    box-shadow: 0 2px 24px 0 rgba(60,72,117,.13);
-    padding: 1.1rem 1.3rem 1.2rem 1rem;
-    border-left: 6px solid #1f4e79;
-    transition: box-shadow 0.18s;
-    min-width: 150px;
-}
-.metric-label {
-    font-size: 1rem;
-    color: var(--text-color);
-    font-weight: 500;
-    margin-bottom: 0.6rem;
-    margin-top: 0.3rem;
-}
-.metric-value {
-    font-size: 2.1rem;
-    color: #4673a7;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-}
-@media (max-width: 1100px) {
-    .card-metric-row { flex-direction: column; gap: 0.8rem; }
-}
+.dashboard-header { display: flex; align-items: center; margin-bottom: 2.3rem;}
+.dashboard-icon { width: 54px; height: 54px; margin-right: 1rem; }
+.dashboard-title { font-size: 2.35rem; font-weight: 700; color: var(--text-color); margin-bottom: 0; }
+.card-metric-row {display: flex; gap: 2.2rem; margin-bottom: 2.5rem;}
+.metric-card {flex: 1; background: var(--background-color);
+  border-radius: 1.1rem; box-shadow: 0 2px 24px 0 rgba(60,72,117,.13);
+  padding: 1.1rem 1.3rem 1.2rem 1rem; border-left: 6px solid #1f4e79;
+  min-width: 150px;}
+.metric-label { font-size: 1rem; color: var(--text-color); font-weight: 500; margin-bottom: 0.6rem; margin-top: 0.3rem;}
+.metric-value { font-size: 2.1rem; color: #4673a7; font-weight: 700; letter-spacing: 0.08em;}
+@media (max-width: 1100px) {.card-metric-row {flex-direction: column; gap: 0.8rem;}}
 </style>
 """, unsafe_allow_html=True)
 
-# --------------------------------
 @st.cache_data
 def load_assets_data():
-    try:
-        url = "https://drive.google.com/uc?id=1YFTWJNoxu0BF8UlMDXI8bXwRTVQNE2mb"
-        response = requests.get(url, timeout=15)
-        if response.status_code == 200:
-            with open("assets.csv", "wb") as f:
-                f.write(response.content)
-            return pd.read_csv("assets.csv")
-    except Exception:
-        return None
-    return None
+    url = "https://drive.google.com/uc?id=1YFTWJNoxu0BF8UlMDXI8bXwRTVQNE2mb"
+    response = requests.get(url, timeout=13)
+    with open("assets.csv", "wb") as f:
+        f.write(response.content)
+    df = pd.read_csv("assets.csv")
+    return df
 
 @st.cache_data
 def load_housing_data():
-    try:
-        url = "https://drive.google.com/uc?id=1fFT8Q8GWiIEM7kx6czhQ-qabygUPBQRv"
-        response = requests.get(url, timeout=15)
-        if response.status_code == 200:
-            with open("housing.csv", "wb") as f:
-                f.write(response.content)
-            return pd.read_csv("housing.csv")
-    except Exception:
-        return None
-    return None
+    url = "https://drive.google.com/uc?id=1fFT8Q8GWiIEM7kx6czhQ-qabygUPBQRv"
+    response = requests.get(url, timeout=13)
+    with open("housing.csv", "wb") as f:
+        f.write(response.content)
+    df = pd.read_csv("housing.csv")
+    return df
 
 @st.cache_data
 def clean_and_merge_data(df_assets, df_prices):
-    if df_assets is None or df_prices is None:
-        raise ValueError("Asset and housing data is required.")
     df_assets.columns = df_assets.columns.str.lower().str.replace(' ', '_').str.replace('-', '_')
     df_prices.columns = df_prices.columns.str.lower().str.replace(' ', '_').str.replace('-', '_')
-    # Filter to valid US coordinates
+    # Coordinates and price index merge
     if {'latitude','longitude'}.issubset(df_assets.columns):
-        valid = (
-            (df_assets['latitude'] >= 24) & (df_assets['latitude'] <= 49) &
-            (df_assets['longitude'] >= -125) & (df_assets['longitude'] <= -66)
-            & df_assets['latitude'].notna() & df_assets['longitude'].notna()
-        )
-        df_assets = df_assets[valid]
+        df_assets = df_assets[(df_assets['latitude'] >= 24) & (df_assets['latitude'] <= 49) & (df_assets['longitude'] >= -125) & (df_assets['longitude'] <= -66)]
     price_cols = [col for col in df_prices.columns if any(y in str(col) for y in ['2024','2025'])]
     if price_cols:
-        df_prices['latest_price_index'] = pd.to_numeric(
-            df_prices[sorted(price_cols)[-1]], errors='coerce'
-        )
+        df_prices['latest_price_index'] = pd.to_numeric(df_prices[sorted(price_cols)[-1]], errors='coerce')
     if {'city','state'}.issubset(df_assets.columns) and {'city','state'}.issubset(df_prices.columns):
         cs_key = lambda df: df['city'].astype(str).str.lower().str.strip() + '_' + df['state'].astype(str).str.lower().str.strip()
         df_assets['city_state_key'] = cs_key(df_assets)
         df_prices['city_state_key'] = cs_key(df_prices)
-        merged = pd.merge(
-            df_assets,
-            df_prices[['city_state_key','latest_price_index']],
-            on='city_state_key',how='left'
-        )
+        merged = pd.merge(df_assets, df_prices[['city_state_key','latest_price_index']], on='city_state_key', how='left')
     else:
         merged = df_assets.copy()
         merged['latest_price_index'] = np.nan
     merged['latest_price_index'] = merged['latest_price_index'].fillna(merged['latest_price_index'].median())
-    rentable_col = None
-    for col in merged.columns:
-        if 'rentable' in col.lower() and 'feet' in col.lower():
-            rentable_col = col; break
-    if not rentable_col:
-        raise ValueError("No rentable square feet column for value estimation.")
-    # --- Realistic scaling for US value (e.g. 320 as avg price per sq ft) ---
+    rentable_col = [col for col in merged.columns if 'rentable' in col and 'feet' in col][0]
     merged['estimated_value'] = merged[rentable_col] * (merged['latest_price_index'] / 320)
     premium_states = ['CA','NY','MA','CT','NJ','HI','MD','WA']
     if 'state' in merged.columns:
@@ -146,34 +81,64 @@ def clean_and_merge_data(df_assets, df_prices):
     merged = merged[~merged['estimated_value'].isna()]
     return merged
 
-@st.cache_data
-def sample_data(df, n=7500, random_state=4742271):
-    if len(df) <= n:
-        return df.reset_index(drop=True)
-    return df.sample(n=n, random_state=random_state).reset_index(drop=True)
+def sample_data(df, n=6000, random_state=4742289):
+    return df.sample(n=min(len(df), n), random_state=random_state).reset_index(drop=True)
 
-# ---------- Executive Dashboard Metrics --------------
+def kmeans_clustering(gdf, n_clusters=5):
+    features = ['longitude','latitude','estimated_value','latest_price_index']
+    scaler = MinMaxScaler()
+    X = scaler.fit_transform(gdf[features])
+    km = KMeans(n_clusters=n_clusters, n_init=10, random_state=4)
+    gdf["cluster_id"] = km.fit_predict(X)
+    # Cluster naming: by most frequent state
+    names = []
+    for i in range(n_clusters):
+        cluster_states = gdf[gdf["cluster_id"] == i]['state']
+        dom = cluster_states.mode().iloc[0] if not cluster_states.empty else f"Cluster {i+1}"
+        names.append(f"{dom} Cluster")
+    gdf["cluster_name"] = gdf["cluster_id"].apply(lambda x: names[x])
+    gdf["geometry"] = [Point(xy) for xy in zip(gdf.longitude, gdf.latitude)]
+    return gdf, names
+
+def spatial_autocorrelation(gdf, value_col='estimated_value'):
+    w = weights.KNN.from_dataframe(gdf, k=8)
+    y = gdf[value_col].values
+    mi = esda.Moran(y, w)
+    return mi.I, mi.p_sim
+
+def prediction_pipeline(df_assets, df_housing):
+    features = ['latitude','longitude','latest_price_index','building_rentable_square_feet']
+    target = 'estimated_value'
+    housingX = df_housing[features].fillna(df_housing[features].median())
+    housingY = df_housing[target]
+    scaler = MinMaxScaler()
+    trainX_scaled = scaler.fit_transform(housingX)
+    model = RandomForestRegressor(n_estimators=100, random_state=99)
+    model.fit(trainX_scaled, housingY)
+    testX = df_assets[features].fillna(df_assets[features].median())
+    testX_scaled = scaler.transform(testX)
+    preds = model.predict(testX_scaled)
+    df_assets['predicted_value'] = preds
+    return df_assets, model
+
+# ---- Layout ----
 def executive_dashboard(df):
-    st.markdown(
-        '''
-        <div class="dashboard-header">
-            <img src="https://cdn-icons-png.flaticon.com/512/1984/1984368.png" class="dashboard-icon"/>
-            <span class="dashboard-title">Executive Dashboard</span>
-        </div>
-        ''', unsafe_allow_html=True
-    )
-
+    st.markdown("""
+    <div class="dashboard-header">
+        <img src="https://cdn-icons-png.flaticon.com/512/1984/1984368.png" class="dashboard-icon"/>
+        <span class="dashboard-title">Executive Dashboard</span>
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown('<div class="card-metric-row">', unsafe_allow_html=True)
     total_assets = len(df)
     total_value = df['estimated_value'].sum()
     avg_value = df['estimated_value'].mean()
-    n_states = df['state'].nunique() if 'state' in df.columns else None
-
+    n_states = df['state'].nunique()
     cards = [
-        {'label':'Total Assets', 'value':f"{total_assets:,}"},
-        {'label':'Portfolio Value', 'value':f"${total_value/1e9:,.1f}B"},
-        {'label':'Average Asset Value', 'value':f"${avg_value/1e6:,.1f}M"},
-        {'label':'States Covered', 'value':str(n_states)},
+        {'label': 'Total Assets', 'value': f"{total_assets:,}"},
+        {'label': 'Portfolio Value', 'value': f"${total_value/1e9:.1f}B"},
+        {'label': 'Average Asset Value', 'value': f"${avg_value/1e6:.1f}M"},
+        {'label': 'States Covered', 'value': str(n_states)},
     ]
     for c in cards:
         st.markdown(f"""
@@ -184,92 +149,99 @@ def executive_dashboard(df):
         """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --------------- MAIN APP LOGIC -----------------
-def main():
-    with st.spinner("Loading and preparing data ..."):
-        df_assets = load_assets_data()
-        df_prices = load_housing_data()
-        if df_assets is None or df_prices is None:
-            st.error("Failed to load US government asset or housing data.")
-            st.stop()
-        df = clean_and_merge_data(df_assets, df_prices)
-        df = sample_data(df)
-    menu = ["Executive Dashboard","Clustering Analysis","Geographic Map","Asset Value Prediction"]
-    choice = st.sidebar.radio("Go to", menu)
-    if choice == "Executive Dashboard":
-        executive_dashboard(df)
+def cluster_map(gdf):
+    m = folium.Map(location=[gdf['latitude'].mean(), gdf['longitude'].mean()], zoom_start=4, tiles='cartodbpositron')
+    colors = px.colors.qualitative.Pastel
+    for _, row in gdf.iterrows():
+        pop = f"""
+        <b>{row.get('city','N/A')}, {row.get('state','N/A')}</b><br>
+        <b>Cluster:</b> {row.get('cluster_name','')}<br>
+        <b>Predicted Value:</b> ${row.get('predicted_value',0):,.0f}<br>
+        <b>Asset Value:</b> ${row.get('estimated_value',0):,.0f}"""
+        color = colors[row['cluster_id'] % len(colors)]
+        folium.CircleMarker(
+            location=[row['latitude'], row['longitude']],
+            radius=7, color=color, fill_color=color, fill_opacity=0.82,
+            popup=folium.Popup(pop, max_width=360)
+        ).add_to(m)
+    return m
 
-    elif choice == "Clustering Analysis":
-        st.header("Clustering Analysis")
-        numeric_cols = ['latitude','longitude','estimated_value','building_rentable_square_feet','latest_price_index']
-        dfc = df[numeric_cols].fillna(df[numeric_cols].median())
-        scaler = MinMaxScaler()
-        X = scaler.fit_transform(dfc)
-        wcss, dbs = [], []
-        k_range = range(2,11)
-        for k in k_range:
-            kmeans = KMeans(n_clusters=k, random_state=4742271, n_init=10)
-            labels = kmeans.fit_predict(X)
-            wcss.append(kmeans.inertia_)
-            dbs.append(davies_bouldin_score(X, labels))
+def geocode_address(address):
+    geolocator = Nominatim(user_agent="asset_dashboard")
+    location = geolocator.geocode(address)
+    if location:
+        return location.latitude, location.longitude
+    return None, None
+
+# ------- Main Streamlit Tabs -------
+def main():
+    df_assets = load_assets_data()
+    df_housing = load_housing_data()
+    df_assets = clean_and_merge_data(df_assets, df_housing)
+    df_assets = sample_data(df_assets, n=5000)
+    tabs = st.tabs([
+        "Executive Dashboard", "Clusters & GIS Map", "EDA & Statistics", "Predictions/Evaluation", "Spatial Stats", "Geocoding"
+    ])
+    
+    with tabs[0]:
+        executive_dashboard(df_assets)
+        st.header("Quick Distribution Overview")
         col1, col2 = st.columns(2)
         with col1:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=list(k_range), y=wcss, mode='lines+markers'))
-            fig.update_layout(title="Elbow Curve (WCSS)", xaxis_title="Clusters (k)", yaxis_title="WCSS")
+            fig = px.histogram(df_assets, x='estimated_value', nbins=30, color_discrete_sequence=['#36A2EB'])
             st.plotly_chart(fig, use_container_width=True)
         with col2:
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=list(k_range), y=dbs, mode='lines+markers'))
-            fig2.update_layout(title="Davies-Bouldin Score", xaxis_title="Clusters (k)", yaxis_title="DB Score (lower is better)")
-            st.plotly_chart(fig2, use_container_width=True)
-        optimal_k = k_range[np.argmin(dbs)]
-        st.success(f"Optimal number of clusters: {optimal_k}")
-        kmeans = KMeans(n_clusters=optimal_k, random_state=4742271, n_init=10)
-        df['cluster'] = kmeans.fit_predict(X)
-        figc = px.scatter(df, x='longitude', y='latitude', color=df['cluster'].astype(str),
-                          title="Clustered US Government Assets", color_continuous_scale='viridis')
-        st.plotly_chart(figc, use_container_width=True)
+            top_states = df_assets['state'].value_counts().head(10)
+            st.bar_chart(top_states)
+    
+    with tabs[1]:
+        st.header("Clustered Asset Map (Human-Readable Names)")
+        df_pred, model = prediction_pipeline(df_assets.copy(), df_housing)
+        n_clusters = st.slider("Number of clusters", 3, 10, 5)
+        gdf = gpd.GeoDataFrame(df_pred, geometry=gpd.points_from_xy(df_pred.longitude, df_pred.latitude))
+        gdf, cluster_names = kmeans_clustering(gdf, n_clusters)
+        # Table
+        tbl = gdf.groupby("cluster_name")['estimated_value'].agg(['count', 'mean', 'sum']).sort_values("sum", ascending=False)
+        st.dataframe(tbl, use_container_width=True)
+        m = cluster_map(gdf)
+        st_folium(m, width=1024, height=560)
+    
+    with tabs[2]:
+        st.header("Descriptive & Inferential Stats")
+        df_pred, model = prediction_pipeline(df_assets.copy(), df_housing)
+        st.write(df_pred['estimated_value'].describe().to_frame().T)
+        st.metric("Skewness", float(df_pred['estimated_value'].skew()))
+        st.metric("Kurtosis", float(df_pred['estimated_value'].kurtosis()))
+        fig = px.scatter(df_pred, x="estimated_value", y="predicted_value", color="state")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with tabs[3]:
+        st.header("Prediction & Feature Importance")
+        df_pred, model = prediction_pipeline(df_assets.copy(), df_housing)
+        r2 = r2_score(df_pred["estimated_value"], df_pred["predicted_value"])
+        st.metric("Prediction $R^2$", f"{r2:.3f}")
+        imp_df = pd.DataFrame({
+            'feature': ['latitude','longitude','latest_price_index','building_rentable_square_feet'],
+            'importance': model.feature_importances_
+        })
+        fig3 = px.bar(imp_df.sort_values('importance', ascending=True), x="importance", y="feature", orientation="h", color="importance")
+        st.plotly_chart(fig3, use_container_width=True)
+        st.dataframe(df_pred[['city','state','predicted_value','estimated_value']].sample(10), use_container_width=True)
+    
+    with tabs[4]:
+        st.header("Spatial Autocorrelation (Moran's I)")
+        gdf = gpd.GeoDataFrame(df_assets.copy(), geometry=gpd.points_from_xy(df_assets.longitude, df_assets.latitude))
+        I, p = spatial_autocorrelation(gdf, 'estimated_value')
+        st.metric("Moran's I", I)
+        st.metric("p-value", p)
+        st.write("Spatial autocorrelation: Significant if Moran's I > 0.1 and p < 0.05.")
 
-    elif choice == "Geographic Map":
-        st.header("Asset Locations Map")
-        df_geo = df.dropna(subset=['latitude', 'longitude']).copy()
-        sample = sample_data(df_geo, 500, 4742271)
-        m = folium.Map([sample.latitude.mean(), sample.longitude.mean()], zoom_start=4)
-        for _, row in sample.iterrows():
-            folium.CircleMarker(
-                location=[row['latitude'], row['longitude']],
-                fill=True,
-                fillColor="#3571b8",
-                color="#222",
-                radius=7,
-                popup=f"{row.get('city','')}, {row.get('state','')}<br>Value: ${row['estimated_value']:,.0f}",
-                fill_opacity=0.65
-            ).add_to(m)
-        st_folium(m, width=950, height=500)
-
-    elif choice == "Asset Value Prediction":
-        st.header("Asset Price Prediction Model")
-        df_ml = df.dropna(subset=['estimated_value','building_rentable_square_feet','latitude','longitude','latest_price_index'])
-        features = ['latitude','longitude','latest_price_index','building_rentable_square_feet']
-        X = df_ml[features]
-        y = df_ml['estimated_value']
-        X_train,X_test,y_train,y_test = train_test_split(X, y, test_size=0.2, random_state=4742271)
-        model = RandomForestRegressor(n_estimators=120, random_state=4742271)
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        r2 = r2_score(y_test, y_pred)
-        st.success(f"Model R² (accuracy): {r2*100:.2f}%")
-        with st.form("predict_form"):
-            st.markdown("#### Enter details to predict asset value:")
-            lat = st.number_input("Latitude", float(X['latitude'].min()), float(X['latitude'].max()), float(X['latitude'].mean()))
-            lon = st.number_input("Longitude", float(X['longitude'].min()), float(X['longitude'].max()), float(X['longitude'].mean()))
-            lpi = st.number_input("Latest Price Index", float(X['latest_price_index'].min()), float(X['latest_price_index'].max()), float(X['latest_price_index'].mean()))
-            sqft = st.number_input("Rentable Square Feet", float(X['building_rentable_square_feet'].min()), float(X['building_rentable_square_feet'].max()), float(X['building_rentable_square_feet'].mean()))
-            submit = st.form_submit_button("Predict Value")
-            if submit:
-                pred = model.predict([[lat, lon, lpi, sqft]])[0]
-                st.success(f"Estimated Asset Value: ${pred:,.2f}")
+    with tabs[5]:
+        st.header("Geocoding Tool")
+        address = st.text_input("Enter address to geocode", value="Times Square, NY")
+        if st.button("Geocode Address"):
+            lat, lon = geocode_address(address)
+            st.success(f"Lat: {lat}, Lon: {lon}")
 
 if __name__ == "__main__":
     main()
