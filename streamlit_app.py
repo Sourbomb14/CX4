@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import folium
 from streamlit_folium import st_folium
+from folium.plugins import HeatMap
 import geopandas as gpd
 from shapely.geometry import Point
 import requests
@@ -14,10 +15,11 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, r2_score
-import seaborn as sns
-import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
+
+# --- Global Configuration ---
+RANDOM_STATE = 4742271
 
 # Set page configuration
 st.set_page_config(
@@ -52,10 +54,14 @@ st.markdown("""
         font-size: 1.2rem !important;
         font-weight: bold !important;
     }
+    .st-emotion-cache-12oz5g7 {
+        padding-top: 0rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Cache data loading functions
+# --- Data Loading and Processing Functions ---
+
 @st.cache_data
 def load_assets_data():
     """Load US Government Assets dataset"""
@@ -63,16 +69,14 @@ def load_assets_data():
         assets_url = "https://drive.google.com/uc?id=1YFTWJNoxu0BF8UlMDXI8bXwRTVQNE2mb"
         response = requests.get(assets_url, timeout=10)
         if response.status_code == 200:
-            with open("temp_assets.csv", "wb") as f:
-                f.write(response.content)
-            df = pd.read_csv("temp_assets.csv", encoding='utf-8')
+            df = pd.read_csv(requests.get(assets_url, stream=True).raw, encoding='utf-8')
             return df
         else:
             st.error("Failed to download assets data")
             return None
     except Exception as e:
         try:
-            df = pd.read_csv("temp_assets.csv", encoding='latin-1')
+            df = pd.read_csv(requests.get(assets_url, stream=True).raw, encoding='latin-1')
             return df
         except Exception as e2:
             st.error(f"Error loading assets data: {e2}")
@@ -85,16 +89,14 @@ def load_housing_data():
         housing_url = "https://drive.google.com/uc?id=1fFT8Q8GWiIEM7kx6czhQ-qabygUPBQRv"
         response = requests.get(housing_url, timeout=10)
         if response.status_code == 200:
-            with open("temp_housing.csv", "wb") as f:
-                f.write(response.content)
-            df = pd.read_csv("temp_housing.csv", encoding='utf-8')
+            df = pd.read_csv(requests.get(housing_url, stream=True).raw, encoding='utf-8')
             return df
         else:
             st.error("Failed to download housing data")
             return None
     except Exception as e:
         try:
-            df = pd.read_csv("temp_housing.csv", encoding='latin-1')
+            df = pd.read_csv(requests.get(housing_url, stream=True).raw, encoding='latin-1')
             return df
         except Exception as e2:
             st.error(f"Error loading housing data: {e2}")
@@ -103,7 +105,7 @@ def load_housing_data():
 @st.cache_data
 def create_sample_data():
     """Create sample data if real data is not available"""
-    np.random.seed(42)
+    np.random.seed(RANDOM_STATE)
     n_samples = 1000
     
     # US state abbreviations
@@ -113,7 +115,7 @@ def create_sample_data():
     data = {
         'state': np.random.choice(states, n_samples),
         'city': np.random.choice(['Los Angeles', 'Houston', 'New York', 'Miami', 'Chicago', 
-                                'Philadelphia', 'Phoenix', 'Atlanta', 'Boston', 'Seattle'], n_samples),
+                                  'Philadelphia', 'Phoenix', 'Atlanta', 'Boston', 'Seattle'], n_samples),
         'latitude': np.random.uniform(25, 48, n_samples),
         'longitude': np.random.uniform(-125, -70, n_samples),
         'building_rentable_square_feet': np.random.uniform(1000, 100000, n_samples),
@@ -213,8 +215,7 @@ def perform_clustering(df, n_clusters=5):
             numeric_cols.append(col)
     
     if len(numeric_cols) == 0:
-        st.error("No numeric columns found for clustering")
-        return df, None
+        return df, None, None, []
     
     # Prepare data for clustering
     cluster_data = df[numeric_cols].fillna(df[numeric_cols].median())
@@ -222,10 +223,33 @@ def perform_clustering(df, n_clusters=5):
     scaled_data = scaler.fit_transform(cluster_data)
     
     # K-means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    kmeans = KMeans(n_clusters=n_clusters, random_state=RANDOM_STATE, n_init=10)
     df['cluster'] = kmeans.fit_predict(scaled_data)
     
-    return df, kmeans
+    return df, kmeans, scaler, numeric_cols
+
+def name_clusters(cluster_stats, col_means):
+    """
+    Assigns descriptive names to clusters based on their average feature values.
+    """
+    names = {}
+    
+    # Sort clusters by their average estimated value
+    sorted_clusters = cluster_stats.sort_values(
+        ('estimated_value', 'mean'), ascending=False
+    ).index
+    
+    for i, cluster_num in enumerate(sorted_clusters):
+        avg_value = cluster_stats.loc[cluster_num, ('estimated_value', 'mean')]
+        
+        if i == 0:
+            names[cluster_num] = f"Cluster {cluster_num}: High-Value Assets"
+        elif i == len(sorted_clusters) - 1:
+            names[cluster_num] = f"Cluster {cluster_num}: Low-Value Assets"
+        else:
+            names[cluster_num] = f"Cluster {cluster_num}: Mid-Value Assets"
+    
+    return names
 
 @st.cache_data
 def create_ml_features(df):
@@ -263,7 +287,7 @@ def create_folium_map(df, sample_size=500):
     
     # Sample data for performance
     if len(df) > sample_size:
-        map_data = df.sample(n=sample_size, random_state=42)
+        map_data = df.sample(n=sample_size, random_state=RANDOM_STATE)
     else:
         map_data = df.copy()
     
@@ -286,15 +310,19 @@ def create_folium_map(df, sample_size=500):
     for idx, (_, row) in enumerate(map_data.iterrows()):
         if 'cluster' in row and not pd.isna(row['cluster']):
             color = colors[int(row['cluster']) % len(colors)]
+            popup_text = f"""
+            <b>Government Asset</b><br>
+            Location: {row.get('city', 'N/A')}, {row.get('state', 'N/A')}<br>
+            Estimated Value: ${row.get('estimated_value', 0):,.0f}<br>
+            Cluster: {row.get('cluster_name', f'Cluster {row["cluster"]}')}
+            """
         else:
             color = 'blue'
-        
-        popup_text = f"""
-        <b>Government Asset</b><br>
-        Location: {row.get('city', 'N/A')}, {row.get('state', 'N/A')}<br>
-        Estimated Value: ${row.get('estimated_value', 0):,.0f}<br>
-        Cluster: {row.get('cluster', 'N/A')}
-        """
+            popup_text = f"""
+            <b>Government Asset</b><br>
+            Location: {row.get('city', 'N/A')}, {row.get('state', 'N/A')}<br>
+            Estimated Value: ${row.get('estimated_value', 0):,.0f}
+            """
         
         folium.CircleMarker(
             location=[row['latitude'], row['longitude']],
@@ -308,6 +336,8 @@ def create_folium_map(df, sample_size=500):
     
     return m
 
+# --- Main Dashboard Functions ---
+
 def main():
     # Header
     st.markdown('<h1 class="main-header">🏛️ US Government Assets Portfolio Analytics Dashboard</h1>', 
@@ -315,7 +345,7 @@ def main():
     
     # Sidebar
     st.sidebar.image("https://via.placeholder.com/300x100/1f4e79/ffffff?text=Analytics+Dashboard", 
-                     use_container_width=True)
+                      use_container_width=True)
     st.sidebar.markdown("### 📊 Navigation")
     
     # Load data
@@ -501,7 +531,7 @@ def show_executive_dashboard(df):
         if len(df) > 10:
             top_10_pct_value = df.nlargest(int(len(df) * 0.1), 'estimated_value')['estimated_value'].sum()
             concentration_pct = (top_10_pct_value / total_value * 100)
-            insights.append(f"🏛️ Value concentration: Top 10% of assets represent {concentration_pct:.1f}% of total value")
+            insights.append(f"🏛️ Value concentration: Top 10% of assets represent **{concentration_pct:.1f}%** of total value")
     
     for insight in insights:
         st.markdown(f'<div class="insight-box">{insight}</div>', unsafe_allow_html=True)
@@ -522,10 +552,10 @@ def show_geographic_analysis(df):
         return
     
     # Interactive map
-    st.subheader("Interactive Asset Map")
+    st.subheader("Interactive Asset Map (Clustering based)")
     
     # Perform clustering for map colors
-    df_clustered, _ = perform_clustering(df_geo, n_clusters=5)
+    df_clustered, _, _, _ = perform_clustering(df_geo, n_clusters=5)
     
     # Create and display map
     map_obj = create_folium_map(df_clustered)
@@ -534,7 +564,25 @@ def show_geographic_analysis(df):
         map_data = st_folium(map_obj, width=700, height=500)
     else:
         st.error("Could not create map")
+
+    st.markdown("---")
     
+    # Geoheatmap
+    st.subheader("Asset Value Concentration (Heatmap)")
+    if 'estimated_value' in df_geo.columns:
+        heat_map_data = df_geo[['latitude', 'longitude', 'estimated_value']].values.tolist()
+        
+        center_lat = df_geo['latitude'].mean()
+        center_lon = df_geo['longitude'].mean()
+        
+        heat_map = folium.Map(location=[center_lat, center_lon], zoom_start=4)
+        HeatMap(heat_map_data, radius=15).add_to(heat_map)
+        st_folium(heat_map, width=700, height=500)
+    else:
+        st.info("Estimated value data not available for heatmap visualization.")
+
+    st.markdown("---")
+
     # Geographic statistics
     col1, col2 = st.columns(2)
     
@@ -583,11 +631,11 @@ def show_clustering_analysis(df):
     st.header("🎯 Clustering Analysis")
     
     # Check if we have necessary data
-    required_cols = ['latitude', 'longitude']
+    required_cols = ['latitude', 'longitude', 'estimated_value', 'building_rentable_square_feet', 'latest_price_index']
     missing_cols = [col for col in required_cols if col not in df.columns]
     
     if missing_cols:
-        st.error(f"Missing required columns for clustering: {missing_cols}")
+        st.error(f"Missing required columns for clustering: **{', '.join(missing_cols)}**")
         return
     
     # Remove rows with missing coordinates
@@ -604,61 +652,90 @@ def show_clustering_analysis(df):
         n_clusters = st.slider("Number of Clusters", min_value=2, max_value=10, value=5)
         
         # Perform K-means clustering only
-        df_clustered, model = perform_clustering(df_clean, n_clusters=n_clusters)
-    
-    with col2:
-        # Cluster visualization
-        if 'latitude' in df_clustered.columns and 'longitude' in df_clustered.columns:
-            sample_size = min(1000, len(df_clustered))
-            sample_data = df_clustered.sample(n=sample_size, random_state=42)
-            
-            fig = px.scatter_mapbox(
-                sample_data,
-                lat="latitude",
-                lon="longitude",
-                color="cluster",
-                size="estimated_value" if 'estimated_value' in sample_data.columns else None,
-                hover_data={'estimated_value': ':$,.0f'} if 'estimated_value' in sample_data.columns else None,
-                mapbox_style="open-street-map",
-                zoom=3,
-                height=600,
-                title="Asset Clusters Geographic Distribution"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-    
-    # Cluster analysis
-    st.subheader("📊 Cluster Analysis")
+        df_clustered, model, scaler, numeric_cols = perform_clustering(df_clean, n_clusters=n_clusters)
     
     if 'cluster' in df_clustered.columns:
-        # Filter out noise points if any
         valid_clusters = df_clustered[df_clustered['cluster'] >= 0]
         
         if len(valid_clusters) > 0:
             agg_dict = {
-                'estimated_value': ['count', 'sum', 'mean', 'std'] if 'estimated_value' in valid_clusters.columns else ['count'],
+                'estimated_value': ['count', 'sum', 'mean', 'std'],
                 'latitude': 'mean',
-                'longitude': 'mean'
+                'longitude': 'mean',
+                'building_rentable_square_feet': 'mean',
+                'latest_price_index': 'mean'
             }
             
             cluster_stats = valid_clusters.groupby('cluster').agg(agg_dict).round(2)
+            cluster_stats.columns = cluster_stats.columns.map('_'.join)
             
-            if 'estimated_value' in valid_clusters.columns:
-                cluster_stats.columns = ['Count', 'Total Value', 'Avg Value', 'Value Std', 'Center Lat', 'Center Lon']
-            else:
-                cluster_stats.columns = ['Count', 'Center Lat', 'Center Lon']
+            cluster_names = name_clusters(cluster_stats, cluster_stats.mean())
+            df_clustered['cluster_name'] = df_clustered['cluster'].map(cluster_names)
+
+            st.markdown(
+                f"""
+                <div class="insight-box">
+                    Clustering was performed using **K-Means** on the following features: 
+                    **{', '.join(numeric_cols)}**. The algorithm groups assets based on the 
+                    similarity of these features, revealing natural segments in the portfolio.
+                </div>
+                """, unsafe_allow_html=True
+            )
+            
+            with col2:
+                # Cluster visualization
+                sample_size = min(1000, len(df_clustered))
+                sample_data = df_clustered.sample(n=sample_size, random_state=RANDOM_STATE)
+                
+                fig = px.scatter_mapbox(
+                    sample_data,
+                    lat="latitude",
+                    lon="longitude",
+                    color="cluster_name",
+                    size="estimated_value",
+                    hover_data={'estimated_value': ':$,.0f', 'cluster_name': True},
+                    mapbox_style="open-street-map",
+                    zoom=3,
+                    height=600,
+                    title="Asset Clusters Geographic Distribution"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Cluster analysis
+            st.subheader("📊 Cluster Analysis")
+            
+            if 'estimated_value_mean' in cluster_stats.columns:
+                cluster_stats = cluster_stats.rename(columns={
+                    'estimated_value_count': 'Count',
+                    'estimated_value_sum': 'Total Value ($)',
+                    'estimated_value_mean': 'Avg Value ($)',
+                    'estimated_value_std': 'Value Std ($)',
+                    'latitude_mean': 'Center Lat',
+                    'longitude_mean': 'Center Lon',
+                    'building_rentable_square_feet_mean': 'Avg Sqft',
+                    'latest_price_index_mean': 'Avg Price Index'
+                })
+                cluster_stats['Total Value ($)'] = cluster_stats['Total Value ($)'].apply(lambda x: f'${x:,.0f}')
+                cluster_stats['Avg Value ($)'] = cluster_stats['Avg Value ($)'].apply(lambda x: f'${x:,.0f}')
+                cluster_stats['Value Std ($)'] = cluster_stats['Value Std ($)'].apply(lambda x: f'${x:,.0f}')
+                cluster_stats['Avg Sqft'] = cluster_stats['Avg Sqft'].apply(lambda x: f'{x:,.0f}')
+                cluster_stats['Avg Price Index'] = cluster_stats['Avg Price Index'].apply(lambda x: f'${x:,.0f}')
+            
+            cluster_stats['Cluster Name'] = [cluster_names.get(i, f'Cluster {i}') for i in cluster_stats.index]
+            cluster_stats.set_index('Cluster Name', inplace=True)
             
             col1, col2 = st.columns(2)
             
             with col1:
-                st.write("**Cluster Statistics**")
+                st.write("**Cluster Statistics and Naming**")
                 st.dataframe(cluster_stats)
             
             with col2:
                 # Cluster size pie chart
-                cluster_counts = valid_clusters['cluster'].value_counts()
+                cluster_counts = valid_clusters['cluster_name'].value_counts()
                 fig = px.pie(
                     values=cluster_counts.values,
-                    names=[f'Cluster {i}' for i in cluster_counts.index],
+                    names=cluster_counts.index,
                     title="Assets Distribution by Cluster"
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -692,15 +769,18 @@ def show_machine_learning(df):
     
     # Prepare data
     X = df_ml[available_features].fillna(df_ml[available_features].median())
+    y = df_ml['estimated_value']
     
     # Check if we have enough data
     if len(X) < 10:
         st.warning("Not enough data for meaningful ML analysis.")
         return
+
+    st.markdown("---")
     
     # ML tasks
     task = st.selectbox("Select ML Task", 
-                       ["Value Prediction (Regression)", "Value Classification", "High-Value Detection"])
+                        ["Value Prediction (Regression)", "Value Classification", "High-Value Detection"])
     
     col1, col2 = st.columns(2)
     
@@ -709,22 +789,19 @@ def show_machine_learning(df):
             if task == "Value Prediction (Regression)":
                 st.subheader("🎯 Asset Value Prediction")
                 
-                # Prepare target
-                y = df_ml['estimated_value']
-                
                 # Train-test split
-                if len(X) > 4:  # Need at least 5 samples for split
-                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                if len(X) > 4:
+                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE)
                     
                     # Train model
-                    model = RandomForestRegressor(n_estimators=50, random_state=42)
+                    model = RandomForestRegressor(n_estimators=50, random_state=RANDOM_STATE)
                     model.fit(X_train, y_train)
                     
                     # Predictions
                     y_pred = model.predict(X_test)
                     r2 = r2_score(y_test, y_pred)
                     
-                    st.metric("R² Score", f"{r2:.3f}")
+                    st.metric("R² Score (Model Accuracy)", f"{r2*100:.2f}%")
                     
                     # Feature importance
                     feature_importance = pd.DataFrame({
@@ -748,28 +825,28 @@ def show_machine_learning(df):
                 
                 # Create value categories
                 try:
-                    y = pd.qcut(df_ml['estimated_value'], q=3, labels=['Low', 'Medium', 'High'], duplicates='drop')
+                    y_class = pd.qcut(df_ml['estimated_value'], q=3, labels=['Low', 'Medium', 'High'], duplicates='drop')
                     
-                    if len(y.unique()) < 2:
+                    if len(y_class.unique()) < 2:
                         st.warning("Cannot create meaningful value categories with current data.")
                         return
                     
                     # Train-test split
                     if len(X) > 4:
-                        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+                        X_train, X_test, y_train, y_test = train_test_split(X, y_class, test_size=0.2, random_state=RANDOM_STATE, stratify=y_class)
                         
                         # Train model
-                        model = RandomForestClassifier(n_estimators=50, random_state=42)
+                        model = RandomForestClassifier(n_estimators=50, random_state=RANDOM_STATE)
                         model.fit(X_train, y_train)
                         
                         # Predictions
                         y_pred = model.predict(X_test)
                         accuracy = accuracy_score(y_test, y_pred)
                         
-                        st.metric("Accuracy", f"{accuracy:.3f}")
+                        st.metric("Accuracy", f"{accuracy*100:.2f}%")
                         
                         # Class distribution
-                        class_dist = y.value_counts()
+                        class_dist = y_class.value_counts()
                         fig = px.pie(
                             values=class_dist.values,
                             names=class_dist.index,
@@ -787,31 +864,31 @@ def show_machine_learning(df):
                 
                 # Binary target (top 25% as high-value)
                 threshold = df_ml['estimated_value'].quantile(0.75)
-                y = (df_ml['estimated_value'] > threshold).astype(int)
+                y_binary = (df_ml['estimated_value'] > threshold).astype(int)
                 
-                if y.sum() == 0 or y.sum() == len(y):
+                if y_binary.sum() == 0 or y_binary.sum() == len(y_binary):
                     st.warning("Cannot create balanced binary classification with current threshold.")
                     return
                 
                 # Train-test split
                 if len(X) > 4:
-                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+                    X_train, X_test, y_train, y_test = train_test_split(X, y_binary, test_size=0.2, random_state=RANDOM_STATE, stratify=y_binary)
                     
                     # Train model
-                    model = RandomForestClassifier(n_estimators=50, random_state=42)
+                    model = RandomForestClassifier(n_estimators=50, random_state=RANDOM_STATE)
                     model.fit(X_train, y_train)
                     
                     # Predictions
                     y_pred = model.predict(X_test)
                     accuracy = accuracy_score(y_test, y_pred)
                     
-                    st.metric("Accuracy", f"{accuracy:.3f}")
+                    st.metric("Accuracy", f"{accuracy*100:.2f}%")
                     st.metric("High-Value Threshold", f"${threshold/1e6:.1f}M")
                     
                     # Distribution
                     dist_data = pd.DataFrame({
                         'Category': ['Regular Value', 'High Value'],
-                        'Count': [(y == 0).sum(), (y == 1).sum()]
+                        'Count': [(y_binary == 0).sum(), (y_binary == 1).sum()]
                     })
                     
                     fig = px.bar(
@@ -829,9 +906,8 @@ def show_machine_learning(df):
     
     with col2:
         st.subheader("🔧 Model Details")
-        
         st.write("**Features Used:**")
-        for feature in available_features[:10]:  # Show first 10 features
+        for feature in available_features[:10]:
             st.write(f"• {feature.replace('_', ' ').title()}")
         
         if len(available_features) > 10:
@@ -845,6 +921,57 @@ def show_machine_learning(df):
         sample_cols = ['estimated_value'] + available_features[:3]
         available_sample_cols = [col for col in sample_cols if col in df_ml.columns]
         st.dataframe(df_ml[available_sample_cols].head())
+
+    st.markdown("---")
+
+    # Asset Price Prediction section
+    st.subheader("📈 Predict Asset Value")
+    
+    st.markdown(
+        """
+        <div class="insight-box">
+        Use the trained regression model to predict the estimated value of a new asset.
+        </div>
+        """, unsafe_allow_html=True
+    )
+
+    with st.expander("Predict a Single Asset Value"):
+        
+        input_data = {}
+        input_data['latitude'] = st.number_input('Latitude', min_value=24.0, max_value=49.0, value=34.05, format="%.2f")
+        input_data['longitude'] = st.number_input('Longitude', min_value=-125.0, max_value=-66.0, value=-118.24, format="%.2f")
+        
+        if 'building_rentable_square_feet' in df_ml.columns:
+            input_data['building_rentable_square_feet'] = st.number_input('Building Rentable Square Feet', value=20000.0, format="%.2f")
+        
+        if 'latest_price_index' in df_ml.columns:
+            input_data['latest_price_index'] = st.number_input('Latest Price Index', value=300000.0, format="%.2f")
+            
+        # Add distances to major cities
+        major_cities = {
+            'NYC': (40.7128, -74.0060), 'LA': (34.0522, -118.2437),
+            'Chicago': (41.8781, -87.6298), 'Houston': (29.7604, -95.3698),
+            'DC': (38.9072, -77.0369)
+        }
+        for city, (lat, lon) in major_cities.items():
+            input_data[f'distance_to_{city.lower()}'] = np.sqrt(
+                (input_data['latitude'] - lat)**2 + (input_data['longitude'] - lon)**2
+            )
+
+        if st.button("Predict Value"):
+            # Ensure the feature order matches the trained model
+            input_df = pd.DataFrame([input_data])[available_features]
+            
+            try:
+                # Re-train the model to ensure it exists
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE)
+                model = RandomForestRegressor(n_estimators=50, random_state=RANDOM_STATE)
+                model.fit(X_train, y_train)
+                
+                predicted_value = model.predict(input_df)[0]
+                st.success(f"**Predicted Asset Value:** ${predicted_value:,.2f}")
+            except Exception as e:
+                st.error(f"Prediction failed: {e}")
 
 def show_advanced_analytics(df):
     """Show advanced analytics"""
