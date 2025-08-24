@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -102,7 +101,9 @@ with st.sidebar:
     st.header("Data Sources")
     st.write("Use internet URLs (CSV, GeoJSON, Shapefile .zip, GeoTIFF, GPKG, etc.)")
 
-    preset_urls = ["https://drive.google.com/uc?id=1YFTWJNoxu0BF8UlMDXI8bXwRTVQNE2mb", "https://drive.google.com/uc?id=1fFT8Q8GWiIEM7kx6czhQ-qabygUPBQRv"]
+    # If you ran my extraction step, these will be auto-filled; else start with an empty list.
+    # Feel free to add your own defaults here:
+    preset_urls = []  # e.g., ["https://example.com/data.geojson", "https://example.com/raster.tif"]
     if not preset_urls:
         st.info("No preset URLs detected. Paste your data URLs below.")
     selected_url = st.selectbox("Preset URLs (from your notebook):", options=["(none)"] + preset_urls)
@@ -132,8 +133,8 @@ def read_vector_from_url(url: str):
         return None
     try:
         if url.lower().endswith(".zip"):
-            return gpd.read_file(url)
-        return gpd.read_file(url)
+            return gpd.read_file(url)  # zipped shapefile support
+        return gpd.read_file(url)     # geojson, gpkg, kml/kmz, etc.
     except Exception as e:
         st.exception(e)
         return None
@@ -291,9 +292,9 @@ def pydeck_map(gdf, geocode_point):
     st.pydeck_chart(r)
 
 st.subheader("🗺️ Map")
-if base_map == "Folium":
+if 'Folium' in base_map:
     folium_map(gdf, geocode_point)
-elif base_map == "PyDeck":
+elif 'PyDeck' in base_map:
     pydeck_map(gdf, geocode_point)
 else:
     st.info("No map engine available.")
@@ -321,20 +322,20 @@ if do_batch_convert:
             out_msgs = []
             for i, u in enumerate([u.strip() for u in batch_urls.splitlines() if u.strip()]):
                 try:
-                    out_path = f"converted_{{i}}.geojson"
+                    out_path = f"converted_{i}.geojson"
                     drv = "GeoJSON"
-                    cmd = f'ogr2ogr -f {{drv}} -t_srs EPSG:{{reproj_epsg}} {{out_path}} {{u}}'
+                    cmd = f'ogr2ogr -f {drv} -t_srs EPSG:{reproj_epsg} {out_path} {u}'
                     ret = os.system(cmd)
                     if ret == 0 and os.path.exists(out_path):
-                        st.success(f"Converted ➜ {{out_path}}")
+                        st.success(f"Converted ➜ {out_path}")
                         with open(out_path, "rb") as f:
                             st.download_button("Download " + out_path, data=f, file_name=out_path)
                     else:
-                        out_msgs.append(f"Failed for: {{u}} (code {{ret}})")
+                        out_msgs.append(f"Failed for: {u} (code {ret})")
                 except Exception as e:
-                    out_msgs.append(f"Error for {{u}}: {{e}}")
+                    out_msgs.append(f"Error for {u}: {e}")
             if out_msgs:
-                st.warning("\\n".join(out_msgs))
+                st.warning("\n".join(out_msgs))
 
 # --- Raster preview (if any) ---
 if rast is not None:
