@@ -1,12 +1,27 @@
+# ==========================
+# Core Requirements
+# ==========================
 streamlit
 pandas
 numpy
 plotly
-geopandas
-folium
-streamlit-folium
-shapely
-requests
-scikit-learn
 matplotlib
 seaborn
+folium
+streamlit-folium
+geopandas
+scikit-learn
+requests
+
+# ==========================
+# GIS & Spatial Analysis (optional, comment out if deployment env has no GDAL)
+# ==========================
+shapely
+fiona
+rtree
+geopy
+
+# ==========================
+# Spatial Statistics (optional, heavy)
+# ==========================
+pysal
