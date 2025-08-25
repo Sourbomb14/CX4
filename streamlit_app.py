@@ -25,6 +25,13 @@ import contextily as cx
 st.set_page_config(layout="wide", page_title="Government Asset Valuation Dashboard")
 RANDOM_STATE = 4742271 # Ensure reproducibility
 
+# --- Global Variables ---
+# Define the exact numeric feature columns the scaler was trained on
+NUMERIC_FEATURE_COLS = [
+    'mean_price', 'median_price', 'std_price', 'price_min', 'price_max', 'price_range',
+    'price_volatility', 'recent_6mo_avg', 'recent_12mo_avg', 'last_price', 'price_trend_slope'
+]
+
 # --- Helper Functions ---
 @st.cache_data
 def load_data():
@@ -48,27 +55,34 @@ def load_data():
 def download_model_files():
     """Downloads all required .pkl files from the specified Google Drive links."""
     file_ids = {
-        "scaler_last_price.pkl": "1SX8nML2-L5TBgtlSABLNSnkdmWWG_n6w",
-        "scaler_all.pkl": "1U6yxKgpTTuvYWMHNKmcDwFihnSJJUHPl",
-        "cluster_1_model.pkl": "1lHdldr_u4V_tJbqWmqZgKCGa7LH4QZW1",
-        "cluster_pca_1_model.pkl": "1EEG7gfXChiDPlu-1dcrYoxQcQsBkbUz-",
-        "cluster_pca_0_model.pkl": "1DOdSlQKGUNVgCaQSqlorSQ42CtrLBTpw",
-        "cluster_0_model.pkl": "1rn0tmVCiNWxMmhnN4K7JaqQbAbp4cpVJ",
-        "global_model.pkl": "1xEMFHHqraqE32qlXxMvm38gRnR6jL80s",
-        "global_model_pca.pkl": "1PzhWJ36LtobDQf-onO_MD7659XAiMOCn",
-        "pca_final.pkl": "1hwI8O2x3LEXSDWk-8HEriicthyo0q3Eq"
+        # ❗️❗️❗️ CRITICAL: The link for scaler_all.pkl is missing. Please add the correct ID.
+        "scaler_all.pkl": "YOUR_FILE_ID_FOR_scaler_all.pkl_HERE",
+        
+        # ❗️❗️❗️ The link for cluster_1_model.pkl is also missing.
+        "cluster_1_model.pkl": "YOUR_FILE_ID_FOR_cluster_1_model.pkl_HERE",
+        
+        "cluster_0_model.pkl": "1JM1tj9PNQ8TEJlR3S0MQTxguLsoXKbcf",
+        "cluster_pca_0_model.pkl": "1X9WmLRoJHCdMcLVKTtsbDujYAIg_o1dU",
+        "cluster_pca_1_model.pkl": "1GaDbbVCBUvjrvSUrfT6GLJUFYVa1xRPG",
+        "global_model.pkl": "1ZWPra5iZ0pEVQgxpPaWx8gX3J9olsb7Z",
+        "global_model_pca.pkl": "1dmE1bEDWUeAkZNkpGDTHEJA6AEt0FPz1",
+        "scaler_last_price.pkl": "1nhoS237W_-5Fsgdo7sDFD5_7hceHappp",
+        "pca_final.pkl": "1gQfXF4aJ-30XispHCOjdv2zfRDw2fhHt"
     }
     
     st.info("Checking for model and scaler files...")
     for filename, file_id in file_ids.items():
+        if "YOUR_FILE_ID" in file_id:
+            st.error(f"FATAL ERROR: The Google Drive link for '{filename}' is missing. Please update the script.")
+            st.stop()
+        
         if not os.path.exists(filename):
             st.info(f"Downloading {filename}...")
             url = f'https://drive.google.com/uc?id={file_id}'
             try:
                 gdown.download(url, filename, quiet=True)
             except Exception as e:
-                st.error(f"Failed to download {filename}. Please check the Google Drive link and sharing permissions.")
-                st.error(f"Error details: {e}")
+                st.error(f"Failed to download {filename}. Please check its Google Drive link and sharing permissions.")
                 st.stop()
 
 @st.cache_resource
@@ -83,24 +97,11 @@ def load_models_and_scalers():
             'last': pickle.load(open("scaler_last_price.pkl", "rb"))
         }
         models['global'] = pickle.load(open("global_model.pkl", "rb"))
-        models['global_pca'] = pickle.load(open("global_model_pca.pkl", "rb"))
-        models['pca_final'] = pickle.load(open("pca_final.pkl", "rb"))
-
-        cluster_models_orig = {}
-        cluster_models_pca = {}
-        for i in range(2):
-            cluster_models_orig[i] = pickle.load(open(f"cluster_{i}_model.pkl", "rb"))
-            cluster_models_pca[i] = pickle.load(open(f"cluster_pca_{i}_model.pkl", "rb"))
-        
-        models['cluster_orig'] = cluster_models_orig
-        models['cluster_pca'] = cluster_models_pca
-        
+        # (Add loading for other models as needed)
         return models
-    except FileNotFoundError as e:
-        st.error(f"Fatal Error: Could not load file {e.filename}. The download may have failed or the file is missing.")
-        st.stop()
     except Exception as e:
-        st.error(f"An unexpected error occurred while loading models: {e}")
+        st.error(f"An error occurred while loading model files: {e}")
+        st.error("This might be because a .pkl file does not contain the correct object type (e.g., 'scaler_all.pkl' is not a scaler).")
         st.stop()
 
 def preprocess_zillow(df_zillow_raw, sample_n=5000):
@@ -110,17 +111,6 @@ def preprocess_zillow(df_zillow_raw, sample_n=5000):
 
     date_cols = [c for c in df_z.columns if c[:2].isdigit()]
     df_z[date_cols] = df_z[date_cols].apply(pd.to_numeric, errors='coerce')
-
-    def remove_outliers_rowwise_simple(row, thresh=3.0):
-        mu = row.mean()
-        sd = row.std()
-        if pd.isna(sd) or sd == 0:
-            return row
-        z = (row - mu) / sd
-        row[abs(z) > thresh] = np.nan
-        return row
-
-    df_z[date_cols] = df_z[date_cols].apply(remove_outliers_rowwise_simple, axis=1)
     
     imputer = KNNImputer(n_neighbors=5)
     df_z[date_cols] = imputer.fit_transform(df_z[date_cols])
@@ -133,11 +123,9 @@ def feature_engineer_zillow(df_z, date_cols):
         mean_price = np.nanmean(prices)
         std_price = np.nanstd(prices)
         
-        features.append({
-            'RegionID': row.get('RegionID'),
+        feature_dict = {
             'City': str(row.get('City', '')).upper().strip(),
             'State': str(row.get('State', '')).upper().strip(),
-            'County': str(row.get('CountyName', '')).upper().strip(),
             'mean_price': mean_price,
             'median_price': np.nanmedian(prices),
             'std_price': std_price,
@@ -149,40 +137,33 @@ def feature_engineer_zillow(df_z, date_cols):
             'recent_12mo_avg': np.nanmean(prices[-12:]) if len(prices) >= 12 else mean_price,
             'last_price': float(prices[-1]),
             'price_trend_slope': float(LinearRegression().fit(np.arange(len(prices)).reshape(-1, 1), prices).coef_[0]) if len(prices) > 1 else 0.0
-        })
+        }
+        features.append(feature_dict)
     return pd.DataFrame(features)
 
 def enrich_assets(df_assets, df_z_features, scaler_all):
-    num_cols = df_z_features.select_dtypes(include=np.number).columns.tolist()
+    df_assets_enriched = pd.merge(df_assets, df_z_features, how='left', on=['City', 'State'])
     
-    df_assets_enriched = df_assets.merge(df_z_features, how='left', on=['City', 'State'])
-    
-    # Simple imputation for missing market data after merge
-    for col in num_cols:
+    for col in NUMERIC_FEATURE_COLS:
         if df_assets_enriched[col].isna().any():
-            df_assets_enriched[col].fillna(df_z_features[col].median(), inplace=True)
+            median_val = df_z_features[col].median()
+            df_assets_enriched[col].fillna(median_val, inplace=True)
     
-    # Scale numeric features
-    df_assets_enriched[num_cols] = scaler_all.transform(df_assets_enriched[num_cols])
+    df_assets_enriched[NUMERIC_FEATURE_COLS] = scaler_all.transform(df_assets_enriched[NUMERIC_FEATURE_COLS])
     
     return df_assets_enriched
 
-def predict_asset_values(assets_df, models, output_col_prefix=""):
-    assets_with_preds = assets_df.copy()
-    num_cols = models['scalers']['all'].feature_names_in_
+def predict_asset_values(assets_df, models):
+    model_to_use = models['global']
+    scaler_last = models['scalers']['last']
     
-    # Ensure all required numeric columns are present and in the correct order
-    x_df = assets_with_preds[num_cols].fillna(0)
+    X = assets_df[NUMERIC_FEATURE_COLS]
     
-    model_to_use = models['global'] # Using global model for simplicity
+    pred_scaled = model_to_use.predict(X)
+    pred_original = scaler_last.inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
     
-    pred_scaled = model_to_use.predict(x_df)
-    pred_original = models['scalers']['last'].inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
-    
-    assets_with_preds[f'{output_col_prefix}pred_last_price_original'] = pred_original
-    
-    return assets_with_preds
-
+    assets_df['pred_last_price_original'] = pred_original
+    return assets_df
 
 # --- Streamlit App Layout ---
 st.title("Government Asset Valuation Dashboard")
@@ -193,16 +174,9 @@ with st.spinner("Loading datasets, models, and scalers..."):
     models = load_models_and_scalers()
 st.success("All data and models loaded successfully.")
 
-# --- Session State Initialization ---
-if 'processed_data' not in st.session_state:
-    st.session_state.processed_data = None
-if 'assets_enriched' not in st.session_state:
-    st.session_state.assets_enriched = None
-
-
 # --- Main App Logic ---
 if st.button("Process Data and Predict Values"):
-    with st.spinner("Processing data, enriching assets, and predicting values... This might take a minute."):
+    with st.spinner("Processing data, enriching assets, and predicting values..."):
         df_z, date_cols = preprocess_zillow(df_zillow_raw)
         df_z_features = feature_engineer_zillow(df_z, date_cols)
         
@@ -211,13 +185,11 @@ if st.button("Process Data and Predict Values"):
         assets_with_predictions = predict_asset_values(assets_enriched, models)
         
         st.session_state.processed_data = assets_with_predictions
-        st.session_state.assets_enriched = assets_enriched
 
     st.success("Processing complete!")
 
-
 # --- Display Results ---
-if st.session_state.processed_data is not None:
+if 'processed_data' in st.session_state and st.session_state.processed_data is not None:
     assets_with_predictions = st.session_state.processed_data
     
     st.header("Predicted Asset Values")
@@ -225,25 +197,3 @@ if st.session_state.processed_data is not None:
     
     st.subheader("Predicted Value Statistics")
     st.write(assets_with_predictions['pred_last_price_original'].describe())
-
-    # Histogram
-    fig, ax = plt.subplots()
-    sns.histplot(assets_with_predictions['pred_last_price_original'].dropna(), bins=50, kde=True, ax=ax)
-    ax.set_title("Distribution of Predicted Asset Values")
-    ax.set_xlabel("Predicted Value ($)")
-    st.pyplot(fig)
-    
-    # Choropleth Map
-    st.subheader("Median Predicted Value by State")
-    state_agg = assets_with_predictions.groupby('State')['pred_last_price_original'].median().reset_index()
-    try:
-        fig = px.choropleth(state_agg,
-                            locations='State',
-                            locationmode="USA-states",
-                            color='pred_last_price_original',
-                            scope="usa",
-                            title="Median Predicted Asset Value by State",
-                            color_continuous_scale=px.colors.sequential.Viridis)
-        st.plotly_chart(fig, use_container_width=True)
-    except Exception as e:
-        st.warning(f"Could not generate choropleth map: {e}")
