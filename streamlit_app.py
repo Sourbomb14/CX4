@@ -52,7 +52,7 @@ COLORS = {
     'border': '#374151'
 }
 
-# Enhanced Dark Mode CSS (same as before - keeping it concise for space)
+# Enhanced Dark Mode CSS
 st.markdown(f"""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -262,11 +262,18 @@ MODEL_URLS = {
     "scaler_all.pkl": "1G3U898UQ4yoWO5TOY01MEDlnprG0bEM6"
 }
 
+def safe_column_access(df, column_name, default_value=None):
+    """Safely access a column, returning default if column doesn't exist."""
+    if column_name in df.columns:
+        return df[column_name]
+    else:
+        if default_value is not None:
+            return pd.Series([default_value] * len(df), index=df.index)
+        return pd.Series([np.nan] * len(df), index=df.index)
+
 def get_value_column(df):
     """
     Safely determine which value column to use for asset predictions.
-    
-    Returns the column name to use for predicted values, handling various naming conventions.
     """
     possible_columns = [
         'pred_last_price_original',
@@ -459,11 +466,11 @@ def create_dummy_enriched_data():
             'price_range': (mean_price * 0.4 - 200000) / 800000,
             
             # FIXED: Use consistent column names
-            'pred_last_price_original': predicted_value,  # Keep original name for compatibility
-            'predicted_value': predicted_value,  # Also provide alternative name
+            'pred_last_price_original': predicted_value,
+            'predicted_value': predicted_value,
             'pred_last_price_scaled': predicted_value / 1000000,
             'predicted_value_scaled': predicted_value / 1000000,
-            'model_used': model_used,
+            'model_used': model_used,  # ENSURE THIS COLUMN EXISTS
             'cluster_kmeans': 0 if base_multiplier > 1.5 else 1,
             
             # Match type for enrichment analysis
@@ -582,10 +589,14 @@ def main():
             # Fallback values
             value_range = (0.1, 10.0)
         
+        # Safe building types access
+        building_types_col = safe_column_access(df_assets, 'Building Type', 'Unknown')
+        building_types_unique = building_types_col.dropna().unique() if not building_types_col.isna().all() else ['All']
+        
         building_types = st.multiselect(
             "🏢 Building Types:",
-            df_assets['Building Type'].dropna().unique() if 'Building Type' in df_assets.columns else ['All'],
-            default=df_assets['Building Type'].dropna().unique()[:3] if 'Building Type' in df_assets.columns else ['All']
+            building_types_unique,
+            default=building_types_unique[:3] if len(building_types_unique) > 3 else building_types_unique
         )
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -804,15 +815,24 @@ def main():
             st.markdown('<div class="dark-card">', unsafe_allow_html=True)
             st.subheader("🎯 Model Usage Distribution")
             
-            model_usage = df_assets_filtered['model_used'].value_counts()
+            # FIXED: Safe access to model_used column with proper method name
+            try:
+                model_usage_col = safe_column_access(df_assets_filtered, 'model_used', 'unknown')
+                model_usage = model_usage_col.value_counts()  # FIXED: Added parentheses
+                
+                if len(model_usage) > 0:
+                    fig = px.pie(
+                        values=model_usage.values,
+                        names=[name.replace('_', ' ').title() for name in model_usage.index],
+                        title="Prediction Model Usage"
+                    )
+                    fig.update_layout(**create_plotly_dark_theme()['layout'])
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("No model usage data available")
+            except Exception as e:
+                st.error(f"Could not create model usage chart: {e}")
             
-            fig = px.pie(
-                values=model_usage.values,
-                names=[name.replace('_', ' ').title() for name in model_usage.index],
-                title="Prediction Model Usage"
-            )
-            fig.update_layout(**create_plotly_dark_theme()['layout'])
-            st.plotly_chart(fig, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
         
         # Top valued assets
@@ -822,11 +842,15 @@ def main():
         display_columns = ['Real Property Asset Name', 'City', 'State', value_column, 'model_used']
         available_columns = [col for col in display_columns if col in df_assets_filtered.columns]
         
-        top_assets = df_assets_filtered.nlargest(10, value_column)[available_columns].copy()
-        if value_column in top_assets.columns:
-            top_assets[value_column] = top_assets[value_column].apply(lambda x: f"${x:,.0f}")
+        try:
+            top_assets = df_assets_filtered.nlargest(10, value_column)[available_columns].copy()
+            if value_column in top_assets.columns:
+                top_assets[value_column] = top_assets[value_column].apply(lambda x: f"${x:,.0f}")
+            
+            st.dataframe(top_assets, use_container_width=True)
+        except Exception as e:
+            st.error(f"Could not display top assets: {e}")
         
-        st.dataframe(top_assets, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
     
     with tab3:
@@ -867,6 +891,9 @@ def main():
                     
                     # Add markers (limit for performance)
                     for idx, row in valid_coords.head(200).iterrows():
+                        # Safe access to model_used for popup
+                        model_used = safe_column_access(pd.DataFrame([row]), 'model_used', 'unknown').iloc[0]
+                        
                         folium.CircleMarker(
                             location=[row['Latitude'], row['Longitude']],
                             radius=8,
@@ -875,7 +902,7 @@ def main():
                             <b>{row.get('Real Property Asset Name', 'Asset')}</b><br>
                             📍 {row['City']}, {row['State']}<br>
                             💰 ${row[value_column]:,.0f}<br>
-                            🤖 Model: {row['model_used']}<br>
+                            🤖 Model: {model_used}<br>
                             🏢 Type: {row.get('Building Type', 'N/A')}
                             </div>
                             """,
@@ -900,12 +927,18 @@ def main():
             
             # State-level aggregation
             try:
+                rentable_sqft_col = safe_column_access(df_assets_filtered, 'Building Rentable Square Feet', 0)
+                
                 state_stats = df_assets_filtered.groupby('State').agg({
-                    value_column: ['count', 'mean', 'median'],
-                    'Building Rentable Square Feet': 'mean'
+                    value_column: ['count', 'mean', 'median']
                 }).round(0)
                 
-                state_stats.columns = ['Count', 'Mean Value', 'Median Value', 'Avg Sq Ft']
+                # Add rentable square feet if available
+                if not rentable_sqft_col.isna().all():
+                    sqft_stats = df_assets_filtered.groupby('State')[rentable_sqft_col.name].mean().round(0)
+                    state_stats = pd.concat([state_stats, sqft_stats.rename('Avg Sq Ft')], axis=1)
+                
+                state_stats.columns = ['Count', 'Mean Value', 'Median Value', 'Avg Sq Ft'] if state_stats.shape[1] == 4 else ['Count', 'Mean Value', 'Median Value']
                 state_stats = state_stats.sort_values('Mean Value', ascending=False)
                 
                 st.dataframe(state_stats.head(10), use_container_width=True)
@@ -915,16 +948,20 @@ def main():
             # Matching quality analysis
             st.subheader("🔗 Data Matching Quality")
             try:
-                match_quality = df_assets_filtered['_match_type'].value_counts()
+                match_quality_col = safe_column_access(df_assets_filtered, '_match_type', 'unknown')
+                match_quality = match_quality_col.value_counts()
                 
-                fig = px.bar(
-                    x=match_quality.values,
-                    y=[name.replace('_', ' ').title() for name in match_quality.index],
-                    orientation='h',
-                    title="Data Matching Distribution"
-                )
-                fig.update_layout(**create_plotly_dark_theme()['layout'], height=300)
-                st.plotly_chart(fig, use_container_width=True)
+                if len(match_quality) > 0:
+                    fig = px.bar(
+                        x=match_quality.values,
+                        y=[name.replace('_', ' ').title() for name in match_quality.index],
+                        orientation='h',
+                        title="Data Matching Distribution"
+                    )
+                    fig.update_layout(**create_plotly_dark_theme()['layout'], height=300)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("No matching quality data available")
             except Exception as e:
                 st.warning(f"Could not create matching quality chart: {e}")
             
@@ -949,7 +986,8 @@ def main():
         
         with col2:
             try:
-                volatile_states = df_assets_filtered.groupby('State')['price_volatility'].mean().nlargest(3)
+                volatility_col = safe_column_access(df_assets_filtered, 'price_volatility', 0.1)
+                volatile_states = df_assets_filtered.groupby('State')[volatility_col.name].mean().nlargest(3)
                 st.write("**⚡ Most Volatile Markets:**")
                 for state, volatility in volatile_states.items():
                     st.write(f"• {state}: {volatility:.3f}")
@@ -958,7 +996,8 @@ def main():
         
         with col3:
             try:
-                growing_states = df_assets_filtered.groupby('State')['price_trend_slope'].mean().nlargest(3)
+                trend_col = safe_column_access(df_assets_filtered, 'price_trend_slope', 0.001)
+                growing_states = df_assets_filtered.groupby('State')[trend_col.name].mean().nlargest(3)
                 st.write("**📈 Fastest Growing:**")
                 for state, trend in growing_states.items():
                     st.write(f"• {state}: {trend:.4f}")
