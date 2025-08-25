@@ -9,6 +9,7 @@ from sklearn.impute import KNNImputer
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import GradientBoostingRegressor
 import streamlit.components.v1 as components
+import re
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -71,12 +72,18 @@ def process_and_predict(_df_zillow_raw, _df_assets_raw, _models):
     try:
         # 1. Feature Engineering for Zillow Data (on a sample for efficiency)
         df_z = _df_zillow_raw.sample(n=10000, random_state=RANDOM_STATE)
-        date_cols = [c for c in df_z.columns if c.startswith('20')]
         
-        # ✅ FIXED: Ensure data is purely numeric before imputation
-        df_z_numeric = df_z[date_cols].apply(pd.to_numeric, errors='coerce').astype(float)
+        # ✅ FIXED: More robust way to find date columns using a regular expression
+        date_pattern = re.compile(r'^\d{4}-\d{2}') # Matches 'YYYY-MM'
+        date_cols = [c for c in df_z.columns if date_pattern.match(c)]
+
+        # ✅ FIXED: Add a check to ensure date columns were actually found
+        if not date_cols:
+            st.error("Data Processing Error: No date-like columns (e.g., '2020-01') were found in the Zillow dataset. Cannot proceed.")
+            return None
+
+        df_z_numeric = df_z[date_cols].apply(pd.to_numeric, errors='coerce')
         
-        # Now, impute the cleaned numeric data
         imputer = KNNImputer(n_neighbors=5)
         df_z[date_cols] = imputer.fit_transform(df_z_numeric)
         
@@ -97,8 +104,7 @@ def process_and_predict(_df_zillow_raw, _df_assets_raw, _models):
         df_enriched = pd.merge(_df_assets_raw, df_z_features, how='left', on=['City', 'State'])
         for col in NUMERIC_FEATURE_COLS:
             if df_enriched[col].isnull().any():
-                median_val = df_z_features[col].median()
-                df_enriched[col] = df_enriched[col].fillna(median_val)
+                df_enriched[col] = df_enriched[col].fillna(df_z_features[col].median())
         
         # 3. Scale Features and Predict
         X_scaled = _models['scalers']['all'].transform(df_enriched[NUMERIC_FEATURE_COLS])
@@ -109,7 +115,7 @@ def process_and_predict(_df_zillow_raw, _df_assets_raw, _models):
         df_final['Predicted Value'] = pred_original
         
         return df_final
-    except ValueError as e:
+    except Exception as e:
         st.error(f"A data processing error occurred: {e}. This may be due to unexpected data formats in the source files.")
         return None
 
@@ -117,12 +123,10 @@ def process_and_predict(_df_zillow_raw, _df_assets_raw, _models):
 st.title("🏛️ Government Asset Valuation Dashboard")
 st.markdown("An analytical tool to assess, predict, and visualize the value of government real estate assets.")
 
-# --- Load Data and Models ---
 with st.spinner("Loading data and predictive models..."):
     df_zillow_raw, df_assets_raw = load_data()
     models = load_models_and_scalers()
 
-# --- Process Data on Demand ---
 if 'processed_data' not in st.session_state:
     st.session_state.processed_data = None
 
@@ -130,34 +134,26 @@ if st.button("🚀 Analyze and Predict Asset Values"):
     with st.spinner("Performing nationwide analysis... This may take a moment."):
         st.session_state.processed_data = process_and_predict(df_zillow_raw, df_assets_raw, models)
 
-# --- Display Dashboard Content ---
 if st.session_state.processed_data is not None:
     df_final = st.session_state.processed_data
-    # (The rest of the main app code remains the same)
     st.header("National Asset Portfolio Overview")
     total_value = df_final['Predicted Value'].sum()
     asset_count = len(df_final)
     avg_value = df_final['Predicted Value'].mean()
-
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Predicted Value", f"${total_value:,.0f}")
     col2.metric("Total Number of Assets", f"{asset_count:,}")
     col3.metric("Average Asset Value", f"${avg_value:,.0f}")
-
     st.markdown("---")
     st.header("Interactive Asset Map")
-    
     try:
-        # Assumes the HTML file is in the root directory
         with open("Clustered_Asset_Map.html", "r", encoding='utf-8') as f:
             map_html = f.read()
         components.html(map_html, height=600, scrolling=True)
     except FileNotFoundError:
-        st.error("Error: `Clustered_Asset_Map.html` not found. Please ensure it is in the root directory of your repository.")
-
+        st.error("Error: `Clustered_Asset_Map.html` not found.")
     st.markdown("---")
     st.header("Data Preview")
     st.dataframe(df_final[['Real Property Asset Name', 'City', 'State', 'Predicted Value']].head(10))
-
 else:
     st.info("Click the button above to begin the analysis and generate predictions.")
