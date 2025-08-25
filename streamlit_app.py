@@ -55,12 +55,8 @@ def load_data():
 def download_model_files():
     """Downloads all required .pkl files from the specified Google Drive links."""
     file_ids = {
-        # ❗️❗️❗️ CRITICAL: The link for scaler_all.pkl is missing. Please add the correct ID.
-        "scaler_all.pkl": "YOUR_FILE_ID_FOR_scaler_all.pkl_HERE",
-        
-        # ❗️❗️❗️ The link for cluster_1_model.pkl is also missing.
-        "cluster_1_model.pkl": "YOUR_FILE_ID_FOR_cluster_1_model.pkl_HERE",
-        
+        "scaler_all.pkl": "1G3U898UQ4yoWO5TOY01MEDlnprG0bEM6",
+        "cluster_1_model.pkl": "13Z7PaHcb9e9tOYXxB7fjWKgrb8rpB3xb",
         "cluster_0_model.pkl": "1JM1tj9PNQ8TEJlR3S0MQTxguLsoXKbcf",
         "cluster_pca_0_model.pkl": "1X9WmLRoJHCdMcLVKTtsbDujYAIg_o1dU",
         "cluster_pca_1_model.pkl": "1GaDbbVCBUvjrvSUrfT6GLJUFYVa1xRPG",
@@ -72,10 +68,6 @@ def download_model_files():
     
     st.info("Checking for model and scaler files...")
     for filename, file_id in file_ids.items():
-        if "YOUR_FILE_ID" in file_id:
-            st.error(f"FATAL ERROR: The Google Drive link for '{filename}' is missing. Please update the script.")
-            st.stop()
-        
         if not os.path.exists(filename):
             st.info(f"Downloading {filename}...")
             url = f'https://drive.google.com/uc?id={file_id}'
@@ -101,7 +93,7 @@ def load_models_and_scalers():
         return models
     except Exception as e:
         st.error(f"An error occurred while loading model files: {e}")
-        st.error("This might be because a .pkl file does not contain the correct object type (e.g., 'scaler_all.pkl' is not a scaler).")
+        st.error("This can happen if a .pkl file (like scaler_all.pkl) does not contain the correct object type.")
         st.stop()
 
 def preprocess_zillow(df_zillow_raw, sample_n=5000):
