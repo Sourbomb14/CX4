@@ -1,84 +1,46 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import seaborn as sns
-import matplotlib.pyplot as plt
-import geopandas as gpd
-import libpysal
-import esda
-import contextily as cx
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+import numpy as np
 
-st.set_page_config(layout="wide", page_title="Deep Dive Analytics")
+st.set_page_config(layout="wide", page_title="Model Performance")
 
-st.title("📊 Deep Dive Analytics")
-st.markdown("Explore spatial patterns, distributions, and trends in asset values.")
+st.title("📈 Model Performance Evaluation")
+st.markdown("Metrics for the Gradient Boosting Regressor model used for predictions.")
 
 if 'processed_data' not in st.session_state or st.session_state.processed_data is None:
-    st.warning("Please run the analysis on the main page first.")
+    st.warning("Please run the analysis on the main page first to evaluate the model.")
     st.stop()
 
 df_final = st.session_state.processed_data
 
-# --- Choropleth Map ---
-st.header("State-Level Value Distribution")
-state_agg = df_final.groupby('State')['Predicted Value'].median().reset_index()
-fig = px.choropleth(
-    state_agg,
-    locations='State',
-    locationmode="USA-states",
-    color='Predicted Value',
-    scope="usa",
-    title="Median Predicted Asset Value by State",
-    color_continuous_scale=px.colors.sequential.Viridis,
-    labels={'Predicted Value': 'Median Value ($)'}
-)
-st.plotly_chart(fig, use_container_width=True)
+# Note: Since we don't have true values, we'll use a placeholder or split the data
+# For this dashboard, we'll assume the 'last_price' from Zillow is our "true" value for comparison
+y_true = df_final['last_price']
+y_pred = df_final['Predicted Value']
 
-# --- Value Distribution Plot ---
-st.header("Distribution of Predicted Asset Values")
-fig, ax = plt.subplots()
-sns.histplot(df_final['Predicted Value'].dropna(), bins=50, kde=True, ax=ax)
-ax.set_title("Asset Value Distribution")
-ax.set_xlabel("Predicted Value ($)")
-ax.set_ylabel("Frequency")
-st.pyplot(fig)
+# --- Calculate Metrics ---
+r2 = r2_score(y_true, y_pred)
+mae = mean_absolute_error(y_true, y_pred)
+mse = mean_squared_error(y_true, y_pred)
+rmse = np.sqrt(mse)
 
-# --- Spatial Autocorrelation (LISA) Map ---
-st.header("Spatial Hotspot Analysis (LISA)")
-st.info("This map identifies statistically significant clusters of high values (High-High, red), low values (Low-Low, blue), and spatial outliers.")
+st.header("Key Performance Indicators (KPIs)")
+st.info("These metrics compare the model's predicted values against the most recent Zillow Home Value Index ('last_price') for the corresponding areas.")
 
-try:
-    gdf = gpd.GeoDataFrame(
-        df_final.dropna(subset=['Latitude', 'Longitude']),
-        geometry=gpd.points_from_xy(df_final.dropna(subset=['Latitude', 'Longitude']).Longitude, df_final.dropna(subset=['Latitude', 'Longitude']).Latitude),
-        crs="EPSG:4326"
-    )
-    gdf = gdf.to_crs(epsg=3857) # Project to Web Mercator for visualization
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader("R-squared (R²)")
+    st.metric(label="Coefficient of Determination", value=f"{r2:.4f}")
+    st.write("This indicates the proportion of the variance in the asset values that is predictable from the features. A higher value is better.")
 
-    # Calculate LISA
-    w = libpysal.weights.KNN.from_dataframe(gdf, k=8)
-    w.transform = 'r'
-    y = gdf['Predicted Value']
-    moran_loc = esda.moran.Moran_Local(y, w)
+with col2:
+    st.subheader("Mean Absolute Error (MAE)")
+    st.metric(label="Average Prediction Error", value=f"${mae:,.0f}")
+    st.write("This is the average absolute difference between the predicted values and the actual values. It gives an idea of the magnitude of the error.")
 
-    # Create labels
-    gdf['lisa_cluster'] = 'Insignificant'
-    gdf.loc[(moran_loc.q == 1) & (moran_loc.p_sim <= 0.05), 'lisa_cluster'] = 'High-High'
-    gdf.loc[(moran_loc.q == 3) & (moran_loc.p_sim <= 0.05), 'lisa_cluster'] = 'Low-Low'
-    
-    # Plotting
-    fig, ax = plt.subplots(figsize=(15, 15))
-    gdf[gdf['lisa_cluster'] != 'Insignificant'].plot(
-        column='lisa_cluster',
-        categorical=True,
-        legend=True,
-        ax=ax,
-        cmap='coolwarm',
-        markersize=20
-    )
-    ax.set_axis_off()
-    cx.add_basemap(ax, crs=gdf.crs.to_string(), source=cx.providers.CartoDB.Positron)
-    st.pyplot(fig)
-
-except Exception as e:
-    st.error(f"Could not generate LISA map. Error: {e}")
+col3, col4 = st.columns(2)
+with col3:
+    st.subheader("Root Mean Squared Error (RMSE)")
+    st.metric(label="Standard Deviation of Residuals", value=f"${rmse:,.0f}")
+    st.write("This measures the standard deviation of the prediction errors. It is more sensitive to large errors than MAE.")
