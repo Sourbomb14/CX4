@@ -68,44 +68,50 @@ def load_models_and_scalers():
 @st.cache_data
 def process_and_predict(_df_zillow_raw, _df_assets_raw, _models):
     """A single function to handle all data processing and prediction steps."""
-    # 1. Feature Engineering for Zillow Data (on a sample for efficiency)
-    df_z = _df_zillow_raw.sample(n=10000, random_state=RANDOM_STATE)
-    date_cols = [c for c in df_z.columns if c.startswith('20')]
-    df_z[date_cols] = df_z[date_cols].apply(pd.to_numeric, errors='coerce')
-    df_z[date_cols] = KNNImputer(n_neighbors=5).fit_transform(df_z[date_cols])
-    
-    features = []
-    for _, row in df_z.iterrows():
-        prices = row[date_cols].values
-        features.append({
-            'City': str(row.get('City', '')).upper().strip(), 'State': str(row.get('State', '')).upper().strip(),
-            'mean_price': np.mean(prices), 'median_price': np.median(prices), 'std_price': np.std(prices),
-            'price_min': np.min(prices), 'price_max': np.max(prices), 'price_range': np.ptp(prices),
-            'price_volatility': np.std(prices) / np.mean(prices) if np.mean(prices) else 0,
-            'recent_6mo_avg': np.mean(prices[-6:]), 'recent_12mo_avg': np.mean(prices[-12:]), 'last_price': prices[-1],
-            'price_trend_slope': LinearRegression().fit(np.arange(len(prices)).reshape(-1, 1), prices).coef_[0]
-        })
-    df_z_features = pd.DataFrame(features)
+    try:
+        # 1. Feature Engineering for Zillow Data (on a sample for efficiency)
+        df_z = _df_zillow_raw.sample(n=10000, random_state=RANDOM_STATE)
+        date_cols = [c for c in df_z.columns if c.startswith('20')]
+        
+        # ✅ FIXED: Ensure data is purely numeric before imputation
+        df_z_numeric = df_z[date_cols].apply(pd.to_numeric, errors='coerce').astype(float)
+        
+        # Now, impute the cleaned numeric data
+        imputer = KNNImputer(n_neighbors=5)
+        df_z[date_cols] = imputer.fit_transform(df_z_numeric)
+        
+        features = []
+        for _, row in df_z.iterrows():
+            prices = row[date_cols].values
+            features.append({
+                'City': str(row.get('City', '')).upper().strip(), 'State': str(row.get('State', '')).upper().strip(),
+                'mean_price': np.mean(prices), 'median_price': np.median(prices), 'std_price': np.std(prices),
+                'price_min': np.min(prices), 'price_max': np.max(prices), 'price_range': np.ptp(prices),
+                'price_volatility': np.std(prices) / np.mean(prices) if np.mean(prices) else 0,
+                'recent_6mo_avg': np.mean(prices[-6:]), 'recent_12mo_avg': np.mean(prices[-12:]), 'last_price': prices[-1],
+                'price_trend_slope': LinearRegression().fit(np.arange(len(prices)).reshape(-1, 1), prices).coef_[0]
+            })
+        df_z_features = pd.DataFrame(features)
 
-    # 2. Enrich Asset Data
-    df_enriched = pd.merge(_df_assets_raw, df_z_features, how='left', on=['City', 'State'])
-    
-    # ✅ FIXED: Use a more robust method for filling missing values to avoid warnings
-    for col in NUMERIC_FEATURE_COLS:
-        if df_enriched[col].isnull().any():
-            median_val = df_z_features[col].median()
-            df_enriched[col] = df_enriched[col].fillna(median_val)
-    
-    # 3. Scale Features and Predict
-    X_scaled = _models['scalers']['all'].transform(df_enriched[NUMERIC_FEATURE_COLS])
-    pred_scaled = _models['global_model'].predict(X_scaled)
-    pred_original = _models['scalers']['last'].inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
-    
-    # ✅ FIXED: Assign the new column to the DataFrame cleanly
-    df_final = df_enriched.copy()
-    df_final['Predicted Value'] = pred_original
-    
-    return df_final
+        # 2. Enrich Asset Data
+        df_enriched = pd.merge(_df_assets_raw, df_z_features, how='left', on=['City', 'State'])
+        for col in NUMERIC_FEATURE_COLS:
+            if df_enriched[col].isnull().any():
+                median_val = df_z_features[col].median()
+                df_enriched[col] = df_enriched[col].fillna(median_val)
+        
+        # 3. Scale Features and Predict
+        X_scaled = _models['scalers']['all'].transform(df_enriched[NUMERIC_FEATURE_COLS])
+        pred_scaled = _models['global_model'].predict(X_scaled)
+        pred_original = _models['scalers']['last'].inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
+        
+        df_final = df_enriched.copy()
+        df_final['Predicted Value'] = pred_original
+        
+        return df_final
+    except ValueError as e:
+        st.error(f"A data processing error occurred: {e}. This may be due to unexpected data formats in the source files.")
+        return None
 
 # --- Main App ---
 st.title("🏛️ Government Asset Valuation Dashboard")
@@ -127,7 +133,7 @@ if st.button("🚀 Analyze and Predict Asset Values"):
 # --- Display Dashboard Content ---
 if st.session_state.processed_data is not None:
     df_final = st.session_state.processed_data
-
+    # (The rest of the main app code remains the same)
     st.header("National Asset Portfolio Overview")
     total_value = df_final['Predicted Value'].sum()
     asset_count = len(df_final)
