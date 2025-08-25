@@ -1,8 +1,6 @@
 streamlit
 pandas
 numpy
-gdown
-scikit-learn
 matplotlib
 seaborn
 plotly
@@ -10,7 +8,11 @@ folium
 streamlit-folium
 geopandas
 shapely
-thefuzz
+scikit-learn
+gdown
+contextily
+scipy
 libpysal
 esda
-contextily
+Pillow
+requests
